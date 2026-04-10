@@ -1,0 +1,40 @@
+# Production overrides for docker-compose.yml
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+  backend:
+    build:
+      target: production
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    restart: always
+    volumes:
+      # No source mounts in production — image is self-contained
+      - upload_data:/app/uploads
+      - model_cache:/root/.cache/huggingface
+
+  worker:
+    build:
+      target: production
+    restart: always
+    volumes:
+      - upload_data:/app/uploads
+      - model_cache:/root/.cache/huggingface
+
+  frontend:
+    build:
+      target: production
+    ports:
+      - "80:80"
+    volumes: []   # override the dev source mounts
+
+  # Nginx reverse proxy (only needed for self-hosted prod; Render handles routing)
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./infra/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+      - frontend
+    restart: always

@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #212529;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #495057;
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #6c757d;
+  }
+
+  @keyframes subtle-text-shimmer {
+    0% {
+      background-position: 200% 50%;
+    }
+
+    100% {
+      background-position: -200% 50%;
+    }
+  }
+}
+
+@layer components {
+  .panel {
+    @apply bg-surface-800 rounded-xl border border-white/5;
+  }
+
+  .btn-primary {
+    @apply bg-accent-600 hover:bg-accent-500 text-white font-medium px-4 py-2 rounded-lg
+           transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  .btn-ghost {
+    @apply text-gray-400 hover:text-gray-100 hover:bg-white/5 px-3 py-1.5 rounded-lg
+           transition-colors duration-150;
+  }
+
+  .structured-response [data-label] {
+    @apply font-semibold text-accent-400 text-xs uppercase tracking-wider mt-4 mb-1;
+  }
+
+  .text-shimmer-subtle {
+    color: transparent;
+    background-image: linear-gradient(
+      90deg,
+      rgba(107, 114, 128, 0.72) 0%,
+      rgba(156, 163, 175, 0.92) 45%,
+      rgba(224, 231, 255, 0.96) 50%,
+      rgba(156, 163, 175, 0.92) 55%,
+      rgba(107, 114, 128, 0.72) 100%
+    );
+    background-size: 220% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    animation: subtle-text-shimmer 3.2s linear infinite;
+  }
+}

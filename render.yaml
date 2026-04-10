@@ -1,0 +1,87 @@
+# Render deployment manifest
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Services declared here:
+#   - web        FastAPI backend (web service, inline ingestion for demo mode)
+#   - frontend   React SPA (static site)
+# Managed infrastructure:
+#   - PostgreSQL (managed DB)
+#   - Redis      (managed Redis)
+#
+# Secrets should be set directly in Render for this demo blueprint.
+
+services:
+  # ── FastAPI backend ──────────────────────────────────────────────────────
+  - type: web
+    name: paperpilot-api
+    env: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: paperpilot-postgres
+          property: connectionString
+      - key: DATABASE_URL_SYNC
+        fromDatabase:
+          name: paperpilot-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: paperpilot-redis
+          type: redis
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          name: paperpilot-redis
+          type: redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          name: paperpilot-redis
+          type: redis
+          property: connectionString
+      - key: CORS_ORIGINS
+        value: https://YOUR-FRONTEND.onrender.com
+      - key: INLINE_INGESTION
+        value: "true"
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+    disk:
+      name: uploads
+      mountPath: /app/uploads
+      sizeGB: 10
+
+  # ── React frontend (static site) ─────────────────────────────────────────
+  - type: web
+    name: paperpilot-frontend
+    env: static
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: ./frontend/dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://YOUR-API.onrender.com
+      - key: VITE_WS_URL
+        value: wss://YOUR-API.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+# ── Managed databases ────────────────────────────────────────────────────
+databases:
+  - name: paperpilot-postgres
+    plan: basic-256mb
+    databaseName: paperpilot
+    user: paperpilot
+
+# ── Managed Redis ────────────────────────────────────────────────────────
+# Declared inline as a Redis service (Render managed Redis)
+# Note: add manually in Render dashboard or use the envFromService syntax above.

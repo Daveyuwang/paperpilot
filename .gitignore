@@ -1,0 +1,53 @@
+# Environment
+.env
+*.env.local
+
+# Local / private docs (not for the remote repo)
+NOTES.md
+PROJECT.md
+notes.md
+project.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Docker volumes (local data)
+postgres_data/
+qdrant_data/
+redis_data/
+uploads/
+
+# IDE
+.idea/
+.vscode/
+.claude/
+.codex/
+.codex
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Alembic
+backend/alembic/versions/*.py
+!backend/alembic/versions/.gitkeep
+
+# Models cache
+*.bin
+*.safetensors
