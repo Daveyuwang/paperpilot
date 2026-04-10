@@ -4,17 +4,17 @@ Agent-driven research assistant for PDFs: hybrid RAG, intent-routed multi-step L
 
 **Guided reading trail** — staged questions across Motivation, Approach, Experiments, and Takeaways.
 
-![Guided reading trail](screenshots/trail.png)
+<img src="screenshots/trail.png" width="640" alt="Guided reading trail" />
 
 **Structured answers** — evidence-grounded responses with citations and streaming.
 
-![Structured answer](screenshots/ans-1.png)
+<img src="screenshots/ans-1.png" width="640" alt="Structured answer" />
 
-![Structured answer (detail)](screenshots/ans-2.png)
+<img src="screenshots/ans-2.png" width="640" alt="Structured answer (detail)" />
 
 **Concept map** — LLM-generated graph of concepts and relations grounded in the paper.
 
-![Concept map](screenshots/concept.png)
+<img src="screenshots/concept.png" width="640" alt="Concept map" />
 
 **Prerequisites:** Docker with Compose · for local dev without Docker: Node 20+, Python 3.11+
 
