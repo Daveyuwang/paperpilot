@@ -2,8 +2,6 @@
 
 Agent-driven research assistant for PDFs: hybrid RAG, intent-routed multi-step LLM pipeline, evidence-grounded streaming Q&A, session memory, and structured concept maps.
 
-## Screenshots
-
 **Guided reading trail** — staged questions across Motivation, Approach, Experiments, and Takeaways.
 
 ![Guided reading trail](screenshots/trail.png)
