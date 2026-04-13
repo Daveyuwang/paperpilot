@@ -3,12 +3,14 @@ One-time scaffold pass: generates the guided question trail using Claude.
 Called synchronously from the Celery worker after ingestion.
 """
 from __future__ import annotations
+import asyncio
 import json
 import re
 import structlog
-from anthropic import Anthropic
 
 from app.config import get_settings
+from app.llm import LLMClient, resolve_llm_settings_for_guest
+from app.db.redis_client import get_guest_llm_settings
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -40,13 +42,13 @@ def generate_question_trail(
     title: str,
     abstract: str,
     section_headers: list[str],
+    *,
+    guest_id: str = "",
 ) -> list[dict]:
     """
     Call Claude to generate a 10-15 question guided trail.
     Returns a list of dicts: {question, stage, anchor_sections}.
     """
-    client = Anthropic(api_key=settings.anthropic_api_key)
-
     user_content = f"""Title: {title or 'Unknown'}
 
 Abstract:
@@ -58,13 +60,22 @@ Section Headers:
 Generate the guided question trail."""
 
     try:
-        message = client.messages.create(
-            model=settings.claude_model,
-            max_tokens=2048,
-            system=SCAFFOLD_SYSTEM,
-            messages=[{"role": "user", "content": user_content}],
-        )
-        raw = message.content[0].text.strip()
+        async def _run() -> str:
+            resolved = await resolve_llm_settings_for_guest(guest_id)
+            llm = LLMClient(resolved)
+            prefs = await get_guest_llm_settings(guest_id) if guest_id else {}
+            lang = (prefs.get("language") or "en").strip()
+            if lang == "zh-Hant":
+                lang = "zh-TW"
+            lang_note = f"[Output language: {lang}.]\n\n"
+            return await llm.create_text(
+                system=lang_note + SCAFFOLD_SYSTEM,
+                messages=[{"role": "user", "content": user_content}],
+                max_tokens=2048,
+                temperature=0.2,
+            )
+
+        raw = asyncio.run(_run()).strip()
         # Strip markdown fences if present
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw)

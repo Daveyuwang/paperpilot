@@ -18,8 +18,8 @@ from __future__ import annotations
 import json
 import re
 import structlog
-from anthropic import AsyncAnthropic
 from app.config import get_settings
+from app.llm.client import LLMClient
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -137,6 +137,7 @@ def _normalize_intent(raw: str) -> str:
 async def classify_intent(
     question: str,
     paper_title: str,
+    llm: LLMClient | None = None,
 ) -> tuple[str, float]:
     """
     Classify the intent of a question.
@@ -153,18 +154,17 @@ async def classify_intent(
 
     # LLM-based classification
     try:
-        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-        resp = await client.messages.create(
-            model=settings.claude_model,
-            max_tokens=100,
+        if llm is None:
+            raise RuntimeError("LLM client not provided for intent routing.")
+        data = await llm.create_json(
             system=INTENT_SYSTEM_PROMPT,
             messages=[{
                 "role": "user",
                 "content": f"Paper: {paper_title}\nQuestion: {question}",
             }],
+            max_tokens=100,
+            temperature=0.0,
         )
-        text = resp.content[0].text.strip()
-        data = json.loads(text)
         intent = _normalize_intent(data.get("intent", "paper_understanding"))
         confidence = float(data.get("confidence", 0.5))
         reason_code = data.get("reason_code", "")

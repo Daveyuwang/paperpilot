@@ -121,3 +121,28 @@ class WSMessageType(str):
     NEXT_QUESTION = "next_question"
     ERROR = "error"
     STATUS = "status"
+
+
+# ── Settings ───────────────────────────────────────────────────────────────
+
+class LLMProtocol(str):
+    OPENAI = "openai"
+    OPENAI_COMPATIBLE = "openai_compatible"
+    ANTHROPIC = "anthropic"
+    GEMINI = "gemini"
+
+
+class LLMSettingsIn(BaseModel):
+    protocol: str = Field(..., min_length=1, max_length=64)
+    base_url: str | None = Field(default=None, max_length=2048)
+    api_key: str | None = Field(default=None, max_length=4096)
+    model: str = Field(default="claude-sonnet-4-6", min_length=1, max_length=256)
+    language: str = Field(default="en", min_length=1, max_length=32)
+
+
+class LLMSettingsOut(BaseModel):
+    protocol: str
+    base_url: str | None = None
+    has_key: bool = False
+    model: str = "claude-sonnet-4-6"
+    language: str = "en"

@@ -58,6 +58,24 @@ export interface Session {
   last_active: string;
 }
 
+export type LLMProtocol = "openai" | "openai_compatible" | "anthropic" | "gemini";
+
+export interface LLMSettingsOut {
+  protocol: LLMProtocol;
+  base_url: string | null;
+  has_key: boolean;
+  model: string;
+  language: string;
+}
+
+export interface LLMSettingsIn {
+  protocol: LLMProtocol;
+  base_url: string | null;
+  api_key?: string;
+  model: string;
+  language: string;
+}
+
 export type ConceptNodeType =
   | "Problem" | "Method" | "Component" | "Baseline"
   | "Dataset" | "Metric" | "Finding" | "Limitation";

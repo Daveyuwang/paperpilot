@@ -5,12 +5,13 @@ Uses Claude to produce 8–15 grounded, typed concept nodes with semantic edges.
 Runs synchronously inside the Celery worker (same pattern as scaffold_pass.py).
 """
 from __future__ import annotations
+import asyncio
 import json
 import re
 import structlog
-from anthropic import Anthropic
 
 from app.config import get_settings
+from app.llm import LLMClient, resolve_llm_settings_for_guest
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -217,6 +218,8 @@ def extract_concept_map(
     paper_title: str,
     paper_abstract: str,
     chunks: list[dict],
+    *,
+    guest_id: str = "",
 ) -> dict:
     """
     Extract a grounded concept map using Claude (sync, for Celery worker).
@@ -224,8 +227,6 @@ def extract_concept_map(
     Returns a dict with keys "nodes" and "edges" matching ConceptMapOut schema.
     Falls back to {"nodes": [], "edges": []} on any error so ingestion never fails.
     """
-    client = Anthropic(api_key=settings.anthropic_api_key)
-
     content_str = _build_content(chunks)
     prompt = EXTRACTION_PROMPT.format(
         title=paper_title or "Unknown Title",
@@ -241,12 +242,16 @@ def extract_concept_map(
     )
 
     try:
-        response = client.messages.create(
-            model=settings.claude_model,
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw_text = response.content[0].text.strip()
+        async def _run() -> str:
+            resolved = await resolve_llm_settings_for_guest(guest_id)
+            llm = LLMClient(resolved)
+            return await llm.create_text(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=4096,
+                temperature=0.2,
+            )
+
+        raw_text = asyncio.run(_run()).strip()
 
         # Extract the JSON object even if the model wraps it in ``` fences
         json_match = re.search(r'\{[\s\S]*\}', raw_text)

@@ -53,7 +53,13 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
             mode_override = data.get("mode_override") or None
 
             # Stream agent output back over the WebSocket
-            async for message in run_agent_turn(session_id, question, question_id, mode_override=mode_override):
+            async for message in run_agent_turn(
+                session_id,
+                question,
+                question_id,
+                mode_override=mode_override,
+                guest_id=guest_id,
+            ):
                 await websocket.send_json(message)
 
     except WebSocketDisconnect:

@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.config import get_settings
 from app.db.postgres import AsyncSessionLocal, init_db
-from app.api import papers, sessions, concepts, ws
+from app.api import papers, sessions, concepts, ws, settings as settings_api
 from app.ingestion.tasks import run_ingestion_job
 from app.models.orm import Paper, PaperStatus
 
@@ -66,6 +66,7 @@ app.add_middleware(
 app.include_router(papers.router, prefix="/api/papers", tags=["papers"])
 app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
 app.include_router(concepts.router, prefix="/api/concepts", tags=["concepts"])
+app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
 app.include_router(ws.router, prefix="/ws", tags=["websocket"])
 
 

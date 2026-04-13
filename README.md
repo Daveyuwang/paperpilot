@@ -16,7 +16,7 @@ Agent-driven research assistant for PDFs: hybrid RAG, intent-routed multi-step L
 
 <img src="screenshots/concept.png" width="480" alt="Concept map" />
 
-**Prerequisites:** Docker with Compose · for local dev without Docker: Node 20+, Python 3.11+
+**Prerequisites:** Docker + Docker Compose
 
 ## Local (Docker)
 
@@ -27,41 +27,40 @@ make up
 make migrate
 ```
 
-## Production (Compose)
-
-```bash
-cp .env.example .env
-# production: DATABASE_*, REDIS_*, QDRANT_*, SECRET_KEY, CORS_ORIGINS, LLM_PROVIDER_API_KEY, …
-
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
-make migrate   # or: docker compose exec backend alembic upgrade head
-```
-
-Frontend: set `VITE_API_URL` / `VITE_WS_URL` at build time if API is not same-origin.
-
-## Testing & CI
-
-```bash
-make test-backend
-```
-
-`.github/workflows/ci.yml` — frontend build + backend tests on push/PR to `main` / `master`.
-
-## Render
-
-1. Edit `render.yaml`: replace `YOUR-API` / `YOUR-FRONTEND`; adjust service names if needed.  
-2. Render Dashboard → **Blueprints** → New Blueprint Instance → pick repo → apply.  
-3. Dashboard env (secrets): `ANTHROPIC_API_KEY`, `SECRET_KEY`, `QDRANT_URL`, `QDRANT_API_KEY`, plus anything else not from linked Postgres/Redis.
-
 ## Dev (no Docker)
+
+Prereqs: Node 20+, Python 3.11+.
 
 ```bash
 # .env → local Postgres, Redis, Qdrant URLs
 
-cd backend && pip install -r requirements.txt
+cd backend
+pip install -r requirements.txt
 alembic upgrade head
 uvicorn app.main:app --reload
 celery -A app.ingestion.celery_app worker -l info
 
-cd ../frontend && npm install && npm run dev
+cd ../frontend
+npm install
+npm run dev
+```
+
+## Configure LLM (in-app)
+
+Open the app and click the **gear icon** in the left sidebar to configure:
+- **Protocol**: OpenAI / OpenAI-compatible (routers like OpenRouter) / Anthropic / Gemini
+- **Base URL**: auto-filled + locked for OpenAI/Gemini/Anthropic; editable for routers
+- **Model**: e.g. `anthropic/claude-sonnet-4-6`
+- **API key**: stored server-side per guest (Redis TTL)
+- **Trail language**: presets (English, Simplified Chinese, Traditional Chinese, Japanese, Korean, Spanish, French, German, Portuguese (Brazil), Russian)
+
+## URLs
+
+- Frontend: `http://localhost:5173`
+- Backend: `http://localhost:8000` (health: `GET /health`)
+
+## Testing
+
+```bash
+make test-backend
 ```

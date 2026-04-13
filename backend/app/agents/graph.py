@@ -41,6 +41,7 @@ async def run_agent_turn(
     question: str,
     question_id: str | None = None,
     mode_override: str | None = None,
+    guest_id: str = "",
 ) -> AsyncGenerator[dict, None]:
     """
     Run one full agent turn and yield WebSocket message dicts.
@@ -60,7 +61,14 @@ async def run_agent_turn(
             yield {"type": "error", "content": "Session not found or has no paper."}
             return
 
-        state = await _load_state(session_id, paper_id, question, question_id, mode_override=mode_override)
+        state = await _load_state(
+            session_id,
+            paper_id,
+            question,
+            question_id,
+            mode_override=mode_override,
+            guest_id=guest_id,
+        )
 
         # ── Route + intent classification ─────────────────────────────────
         logger.info("question_submit", session_id=session_id, question=question[:80])
@@ -365,12 +373,18 @@ async def _load_state(
     question: str,
     question_id: str | None,
     mode_override: str | None = None,
+    guest_id: str = "",
 ) -> AgentState:
     redis_state = await get_session_state(session_id)
     paper_title, paper_abstract, guide_questions = await _load_paper_context(paper_id)
-    return AgentState(
+    from app.llm import LLMClient, resolve_llm_settings_for_guest
+
+    resolved = await resolve_llm_settings_for_guest(guest_id) if guest_id else await resolve_llm_settings_for_guest("")
+    llm_client = LLMClient(resolved)
+    state = AgentState(
         session_id=session_id,
         paper_id=paper_id,
+        guest_id=guest_id,
         question=question,
         question_id=question_id,
         mode_override=mode_override,
@@ -386,6 +400,8 @@ async def _load_state(
         recent_messages=redis_state.get("recent_messages", []),
         session_language=redis_state.get("session_language", ""),
     )
+    state._llm_client = llm_client
+    return state
 
 
 async def _load_paper_context(paper_id: str) -> tuple[str, str, list[dict]]:

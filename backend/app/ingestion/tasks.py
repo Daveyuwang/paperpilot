@@ -44,6 +44,8 @@ def run_ingestion_job(paper_id: str, pdf_path: str) -> dict:
         logger.info("ingestion_aborted_deleted", paper_id=paper_id, stage=stage)
         return True
 
+    guest_id_for_llm: str = ""
+
     def _update_status(status: PaperStatus, error: str | None = None):
         with SyncSession(engine) as db:
             paper = db.get(Paper, paper_id)
@@ -102,6 +104,7 @@ def run_ingestion_job(paper_id: str, pdf_path: str) -> dict:
             if not paper:
                 logger.info("ingestion_aborted_deleted", paper_id=paper_id, stage="before_persist")
                 return {"paper_id": paper_id, "status": "deleted"}
+            guest_id_for_llm = paper.guest_id or ""
             paper.title = parsed.get("title")
             paper.abstract = parsed.get("abstract")
             paper.section_headers = parsed.get("section_headers")
@@ -167,6 +170,7 @@ def run_ingestion_job(paper_id: str, pdf_path: str) -> dict:
             paper_title=parsed.get("title", ""),
             paper_abstract=parsed.get("abstract", ""),
             chunks=chunks,
+            guest_id=guest_id_for_llm,
         )
         if _abort_if_deleted("after_concept_extract"):
             return {"paper_id": paper_id, "status": "deleted"}
@@ -192,6 +196,7 @@ def run_ingestion_job(paper_id: str, pdf_path: str) -> dict:
             title=parsed.get("title", ""),
             abstract=parsed.get("abstract", ""),
             section_headers=parsed.get("section_headers", []),
+            guest_id=guest_id_for_llm,
         )
         if _abort_if_deleted("after_scaffold_generate"):
             return {"paper_id": paper_id, "status": "deleted"}
@@ -261,6 +266,7 @@ def run_concept_regeneration_job(paper_id: str) -> dict:
         # Extract plain strings before the session closes
         paper_title = paper.title or ""
         paper_abstract = paper.abstract or ""
+        guest_id_for_llm = paper.guest_id or ""
 
         chunks_result = db.execute(
             select(Chunk)
@@ -282,6 +288,7 @@ def run_concept_regeneration_job(paper_id: str) -> dict:
         paper_title=paper_title,
         paper_abstract=paper_abstract,
         chunks=chunks,
+        guest_id=guest_id_for_llm,
     )
 
     with SyncSession(engine) as db:

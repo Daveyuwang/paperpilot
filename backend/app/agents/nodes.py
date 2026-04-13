@@ -13,10 +13,10 @@ from __future__ import annotations
 import json
 import re
 import structlog
-from anthropic import AsyncAnthropic
 
 from app.config import get_settings
 from app.agents.state import AgentState
+from app.llm.client import LLMClient
 from app.agents.prompts import (
     EVIDENCE_EXTRACTION_SYSTEM,
     SYNTHESIZE_SYSTEM,
@@ -57,8 +57,11 @@ def _sanitize_text(text: str | None, fallback: str = "") -> str:
     return text if text else fallback
 
 
-def _client() -> AsyncAnthropic:
-    return AsyncAnthropic(api_key=settings.anthropic_api_key)
+def _llm(state: AgentState) -> LLMClient:
+    client = getattr(state, "_llm_client", None)
+    if client is None:
+        raise RuntimeError("LLM client not configured for this session.")
+    return client
 
 
 def _clean_json(raw: str) -> str:
@@ -191,7 +194,7 @@ async def route_input(state: AgentState) -> dict:
         confidence = 1.0
         logger.info("mode_override_applied", intent=intent, question=state.question[:80])
     else:
-        intent, confidence = await classify_intent(state.question, state.paper_title)
+        intent, confidence = await classify_intent(state.question, state.paper_title, llm=_llm(state))
         logger.info("intent_classified", intent=intent, confidence=confidence, question=state.question[:80])
 
     update["intent"] = intent
@@ -223,13 +226,12 @@ async def enrich_query(state: AgentState) -> dict:
     )
 
     try:
-        message = await _client().messages.create(
-            model=settings.claude_model,
-            max_tokens=150,
+        enriched = await _llm(state).create_text(
             system=QUERY_ENRICHMENT_SYSTEM,
             messages=[{"role": "user", "content": user_content}],
+            max_tokens=150,
+            temperature=0.2,
         )
-        enriched = message.content[0].text.strip()
         logger.debug("query_enriched", original=state.question[:60], enriched=enriched[:80])
         return {"enriched_query": enriched or state.question}
     except Exception as exc:
@@ -294,18 +296,16 @@ async def fetch_external(state: AgentState) -> dict:
     evidence_preview = "\n".join(
         c.get("content", "")[:200] for c in state.retrieved_chunks[:3]
     )
-    decision_msg = await _client().messages.create(
-        model=settings.claude_model,
-        max_tokens=150,
-        system=EXTERNAL_DECISION_SYSTEM,
-        messages=[{
-            "role": "user",
-            "content": f"Question: {state.question}\n\nEvidence preview:\n{evidence_preview}",
-        }],
-    )
     try:
-        raw = _clean_json(decision_msg.content[0].text)
-        decision = json.loads(raw)
+        decision = await _llm(state).create_json(
+            system=EXTERNAL_DECISION_SYSTEM,
+            messages=[{
+                "role": "user",
+                "content": f"Question: {state.question}\n\nEvidence preview:\n{evidence_preview}",
+            }],
+            max_tokens=150,
+            temperature=0.2,
+        )
         needs = decision.get("needs_external", False)
     except Exception:
         needs = False
@@ -358,22 +358,18 @@ async def extract_evidence(state: AgentState) -> dict:
         content = (chunk.get("content") or "")[:700]
         chunks_text += f"\n[Chunk {i}] §{section}, p.{page}:\n{content}\n"
 
-    message = await _client().messages.create(
-        model=settings.claude_model,
-        max_tokens=900,
-        system=EVIDENCE_EXTRACTION_SYSTEM,
-        messages=[{
-            "role": "user",
-            "content": f"Question: {state.question}\n\nChunks:{chunks_text}",
-        }],
-    )
-
-    raw = _clean_json(message.content[0].text)
-
     try:
-        data = json.loads(raw)
+        data = await _llm(state).create_json(
+            system=EVIDENCE_EXTRACTION_SYSTEM,
+            messages=[{
+                "role": "user",
+                "content": f"Question: {state.question}\n\nChunks:{chunks_text}",
+            }],
+            max_tokens=900,
+            temperature=0.2,
+        )
     except Exception:
-        logger.warning("evidence_extraction_parse_failed", raw=raw[:200])
+        logger.warning("evidence_extraction_parse_failed")
         return {
             "extracted_evidence": [],
             "evidence_confidence": 0.3,
@@ -477,22 +473,20 @@ async def synthesize_answer(state: AgentState, stream_callback=None) -> dict:
 
     logger.info("generation_start", session_id=state.session_id, mode="paper_understanding")
 
-    async with _client().messages.stream(
-        model=settings.claude_model,
-        max_tokens=1400,
+    async for chunk in _llm(state).stream_text(
         system=SYNTHESIZE_SYSTEM,
         messages=[{"role": "user", "content": user_content}],
-    ) as stream:
-        async for chunk in stream.text_stream:
-            accumulated += chunk
-            tokens = extractor.feed(chunk)
-            for tok in tokens:
-                if tok and stream_callback:
-                    if not first_token_emitted:
-                        # Signal that actual writing has started
-                        await stream_callback({"type": "status", "content": "Writing grounded answer…"})
-                        first_token_emitted = True
-                    await stream_callback({"type": "token", "content": tok})
+        max_tokens=1400,
+        temperature=0.2,
+    ):
+        accumulated += chunk
+        tokens = extractor.feed(chunk)
+        for tok in tokens:
+            if tok and stream_callback:
+                if not first_token_emitted:
+                    await stream_callback({"type": "status", "content": "Writing grounded answer…"})
+                    first_token_emitted = True
+                await stream_callback({"type": "token", "content": tok})
 
     logger.info("generation_end", session_id=state.session_id, mode="paper_understanding")
 
@@ -562,21 +556,20 @@ async def synthesize_concept_explanation(state: AgentState, stream_callback=None
 
     logger.info("generation_start", session_id=state.session_id, mode="concept_explanation")
 
-    async with _client().messages.stream(
-        model=settings.claude_model,
-        max_tokens=1000,
+    async for chunk in _llm(state).stream_text(
         system=CONCEPT_EXPLANATION_SYSTEM,
         messages=[{"role": "user", "content": user_content}],
-    ) as stream:
-        async for chunk in stream.text_stream:
-            accumulated += chunk
-            tokens = extractor.feed(chunk)
-            for tok in tokens:
-                if tok and stream_callback:
-                    if not first_token_emitted:
-                        await stream_callback({"type": "status", "content": "Writing explanation…"})
-                        first_token_emitted = True
-                    await stream_callback({"type": "token", "content": tok})
+        max_tokens=1000,
+        temperature=0.2,
+    ):
+        accumulated += chunk
+        tokens = extractor.feed(chunk)
+        for tok in tokens:
+            if tok and stream_callback:
+                if not first_token_emitted:
+                    await stream_callback({"type": "status", "content": "Writing explanation…"})
+                    first_token_emitted = True
+                await stream_callback({"type": "token", "content": tok})
 
     logger.info("generation_end", session_id=state.session_id, mode="concept_explanation")
 
@@ -658,18 +651,11 @@ def _expansion_fallback_json(emitted: str, web_searched: bool, raw_text: str = "
 async def synthesize_expansion(state: AgentState, stream_callback=None) -> dict:
     """
     Generate a response for external_expansion questions.
-    When web_search_enabled=True, passes the web_search_20250305 server-side tool
-    and iterates the raw event stream to detect search calls and emit accurate status.
-    Falls back to LLM-knowledge-only on tool error.
+    Provider-agnostic implementation: if web_search_enabled, fetch a lightweight
+    external context snippet server-side and include it in the prompt.
     """
-    from anthropic.types import RawContentBlockStartEvent, RawContentBlockDeltaEvent
-
     web_search_enabled = settings.web_search_enabled
     system_prompt = EXPANSION_WITH_SEARCH_SYSTEM if web_search_enabled else EXPANSION_SYNTHESIZE_SYSTEM
-    tools = (
-        [{"type": "web_search_20260209", "name": "web_search"}]
-        if web_search_enabled else []
-    )
 
     user_content = _language_note(state.session_language) + (
         f"Paper: {state.paper_title or 'this paper'}\n"
@@ -677,104 +663,45 @@ async def synthesize_expansion(state: AgentState, stream_callback=None) -> dict:
         f"Session context: {_build_session_context(state)}"
     )
 
+    external_context = ""
+    if web_search_enabled:
+        if stream_callback:
+            await stream_callback({"type": "status", "content": "Searching the web…"})
+        try:
+            external_context = await _fetch_from_sources(state.question, state.paper_title)
+        except Exception:
+            external_context = ""
+        if external_context:
+            user_content += f"\n\nExternal context:\n{external_context}"
+
     accumulated = ""
     extractor = _DirectAnswerExtractor()
     first_token_emitted = False
-    web_searched = False
-    search_queries_made = 0
-    fallback_triggered = False
-    fallback_reason = ""
-    t_tool_start: float | None = None
-    t_tool_end: float | None = None
 
     logger.info(
         "generation_start",
         session_id=state.session_id,
         mode="external_expansion",
         web_search_enabled=web_search_enabled,
-        tool_declared_in_request=web_search_enabled,
+        tool_declared_in_request=False,
     )
-
-    request_kwargs: dict = dict(
-        model=settings.claude_model,
-        max_tokens=2000,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_content}],
-    )
-    if tools:
-        request_kwargs["tools"] = tools
-
     try:
-        async with _client().messages.stream(**request_kwargs) as stream:
-            async for event in stream:
-                if isinstance(event, RawContentBlockStartEvent):
-                    cb = event.content_block
-                    # Server-side tools surface as "server_tool_use" (not "tool_use")
-                    if cb.type in ("tool_use", "server_tool_use") and getattr(cb, "name", "") == "web_search":
-                        if t_tool_start is None:
-                            import time as _time
-                            t_tool_start = _time.perf_counter()
-                        web_searched = True
-                        search_queries_made += 1
-                        if stream_callback:
-                            await stream_callback({"type": "status", "content": "Searching the web…"})
-                    elif cb.type == "text" and web_searched and not first_token_emitted:
-                        import time as _time
-                        t_tool_end = _time.perf_counter()
-                        if stream_callback:
-                            await stream_callback({"type": "status", "content": "Synthesizing results…"})
-
-                elif isinstance(event, RawContentBlockDeltaEvent):
-                    delta = event.delta
-                    if delta.type == "text_delta":
-                        chunk = delta.text
-                        accumulated += chunk
-                        tokens = extractor.feed(chunk)
-                        for tok in tokens:
-                            if tok and stream_callback:
-                                if not first_token_emitted:
-                                    if not web_searched:
-                                        await stream_callback(
-                                            {"type": "status", "content": "Writing expanded response…"}
-                                        )
-                                    first_token_emitted = True
-                                await stream_callback({"type": "token", "content": tok})
-
+        async for chunk in _llm(state).stream_text(
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_content}],
+            max_tokens=2000,
+            temperature=0.2,
+        ):
+            accumulated += chunk
+            tokens = extractor.feed(chunk)
+            for tok in tokens:
+                if tok and stream_callback:
+                    if not first_token_emitted:
+                        await stream_callback({"type": "status", "content": "Writing expanded response…"})
+                        first_token_emitted = True
+                    await stream_callback({"type": "token", "content": tok})
     except Exception as exc:
-        fallback_triggered = True
-        fallback_reason = str(exc)
-        logger.warning(
-            "expansion_search_error",
-            error=str(exc),
-            web_search_enabled=web_search_enabled,
-            retrying_without_tools=web_search_enabled,
-        )
-        if web_search_enabled:
-            # Retry without web search (e.g. API key does not have tool access)
-            accumulated = ""
-            extractor = _DirectAnswerExtractor()
-            first_token_emitted = False
-            web_searched = False
-            try:
-                async with _client().messages.stream(
-                    model=settings.claude_model,
-                    max_tokens=1500,
-                    system=EXPANSION_SYNTHESIZE_SYSTEM,
-                    messages=[{"role": "user", "content": user_content}],
-                ) as stream2:
-                    async for chunk in stream2.text_stream:
-                        accumulated += chunk
-                        tokens = extractor.feed(chunk)
-                        for tok in tokens:
-                            if tok and stream_callback:
-                                if not first_token_emitted:
-                                    await stream_callback(
-                                        {"type": "status", "content": "Writing expanded response…"}
-                                    )
-                                    first_token_emitted = True
-                                await stream_callback({"type": "token", "content": tok})
-            except Exception as exc2:
-                logger.error("expansion_fallback_failed", error=str(exc2))
+        logger.warning("expansion_synthesize_failed", error=str(exc))
 
     # Detect response language (CJK heuristic)
     cjk_count = sum(1 for ch in accumulated if "\u4e00" <= ch <= "\u9fff")
@@ -786,7 +713,7 @@ async def synthesize_expansion(state: AgentState, stream_callback=None) -> dict:
         answer_json = json.loads(raw)
     except Exception:
         logger.warning("expansion_synthesize_parse_failed", raw=raw[:300])
-        answer_json = _expansion_fallback_json(extractor._emitted, web_searched, raw_text=accumulated)
+        answer_json = _expansion_fallback_json(extractor._emitted, bool(external_context), raw_text=accumulated)
 
     answer_json["answer_mode"] = "external_expansion"
     answer_json["scope_label"] = "Beyond this paper"  # always hardcoded
@@ -797,10 +724,10 @@ async def synthesize_expansion(state: AgentState, stream_callback=None) -> dict:
         session_id=state.session_id,
         router_mode="external_expansion",
         web_search_enabled=web_search_enabled,
-        tool_declared_in_request=web_search_enabled,
-        tool_called_by_model=web_searched,
-        search_queries_made=search_queries_made,
-        used_external_results_in_synthesis=web_searched,
+        tool_declared_in_request=False,
+        tool_called_by_model=False,
+        search_queries_made=0,
+        used_external_results_in_synthesis=bool(external_context),
         scope_label_rendered=answer_json["scope_label"],
         response_language=response_language,
     )
@@ -808,23 +735,19 @@ async def synthesize_expansion(state: AgentState, stream_callback=None) -> dict:
     if stream_callback:
         await stream_callback({"type": "answer_json", "content": answer_json})
 
-    latency_tool_ms: int | None = None
-    if t_tool_start is not None and t_tool_end is not None:
-        latency_tool_ms = round((t_tool_end - t_tool_start) * 1000)
-
     return {
         "answer_text": answer_json.get("direct_answer", ""),
         "answer_json": answer_json,
         "citations": [],
         "trace_metadata": {
             "tool_requested": web_search_enabled,
-            "tool_called": web_searched,
-            "tool_name": "web_search" if web_searched else None,
-            "tool_success": web_searched,
-            "search_results_count": search_queries_made,
-            "fallback_triggered": fallback_triggered,
-            "fallback_reason": fallback_reason if fallback_triggered else None,
-            "latency_tool_ms": latency_tool_ms,
+            "tool_called": False,
+            "tool_name": None,
+            "tool_success": bool(external_context),
+            "search_results_count": 0,
+            "fallback_triggered": False,
+            "fallback_reason": None,
+            "latency_tool_ms": None,
         },
     }
 
@@ -848,21 +771,20 @@ async def synthesize_navigation(state: AgentState, stream_callback=None) -> dict
 
     logger.info("generation_start", session_id=state.session_id, mode="navigation_or_next_step")
 
-    async with _client().messages.stream(
-        model=settings.claude_model,
-        max_tokens=800,
+    async for chunk in _llm(state).stream_text(
         system=NAVIGATION_SYNTHESIZE_SYSTEM,
         messages=[{"role": "user", "content": user_content}],
-    ) as stream:
-        async for chunk in stream.text_stream:
-            accumulated += chunk
-            tokens = extractor.feed(chunk)
-            for tok in tokens:
-                if tok and stream_callback:
-                    if not first_token_emitted:
-                        await stream_callback({"type": "status", "content": "Writing guidance…"})
-                        first_token_emitted = True
-                    await stream_callback({"type": "token", "content": tok})
+        max_tokens=800,
+        temperature=0.2,
+    ):
+        accumulated += chunk
+        tokens = extractor.feed(chunk)
+        for tok in tokens:
+            if tok and stream_callback:
+                if not first_token_emitted:
+                    await stream_callback({"type": "status", "content": "Writing guidance…"})
+                    first_token_emitted = True
+                await stream_callback({"type": "token", "content": tok})
 
     logger.info("generation_end", session_id=state.session_id, mode="navigation_or_next_step")
 
@@ -906,16 +828,15 @@ async def explain_term(state: AgentState, stream_callback=None) -> dict:
         return {}
 
     term = terms[0]
-    message = await _client().messages.create(
-        model=settings.claude_model,
-        max_tokens=200,
+    explanation = await _llm(state).create_text(
         system=EXPLAIN_TERM_SYSTEM,
         messages=[{
             "role": "user",
             "content": f"Paper: {state.paper_title}\nTerm: {term}\nContext: {state.answer_text[:400]}",
         }],
+        max_tokens=200,
+        temperature=0.2,
     )
-    explanation = message.content[0].text
 
     updated_json = state.answer_json.copy() if state.answer_json else {}
     existing_pl = updated_json.get("plain_language") or ""
@@ -954,7 +875,7 @@ async def update_session(state: AgentState) -> dict:
     turn_count = state.turn_count + 1
     if turn_count % 5 == 0:
         new_summary = await _compress_summary(
-            state.session_summary, state.question, state.answer_text
+            _llm(state), state.session_summary, state.question, state.answer_text
         )
     else:
         snippet = state.answer_text[:200].replace("\n", " ")
@@ -1036,10 +957,8 @@ def _language_note(session_language: str) -> str:
     return f"[Session language: {lang_name}. Write ALL response fields in {lang_name}.]\n\n"
 
 
-async def _compress_summary(current: str, last_q: str, last_a: str) -> str:
-    msg = await _client().messages.create(
-        model=settings.claude_model,
-        max_tokens=300,
+async def _compress_summary(llm: LLMClient, current: str, last_q: str, last_a: str) -> str:
+    return await llm.create_text(
         messages=[{
             "role": "user",
             "content": SESSION_COMPRESS_PROMPT.format(
@@ -1048,8 +967,9 @@ async def _compress_summary(current: str, last_q: str, last_a: str) -> str:
                 last_a=last_a[:300],
             ),
         }],
+        max_tokens=300,
+        temperature=0.2,
     )
-    return msg.content[0].text.strip()
 
 
 # ── Node 8: SuggestNext ───────────────────────────────────────────────────

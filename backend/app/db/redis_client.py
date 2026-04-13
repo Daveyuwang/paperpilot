@@ -26,6 +26,7 @@ def get_redis() -> aioredis.Redis:
 # ── Session state helpers ──────────────────────────────────────────────────
 
 SESSION_TTL = 60 * 60 * 24  # 24 hours
+GUEST_SETTINGS_TTL = 60 * 60 * 24  # 24 hours
 
 
 async def get_session_state(session_id: str) -> dict[str, Any]:
@@ -51,6 +52,26 @@ async def update_session_state(session_id: str, updates: dict[str, Any]) -> dict
 async def delete_session_state(session_id: str) -> None:
     r = get_redis()
     await r.delete(f"session:{session_id}")
+
+
+# ── Guest settings helpers ────────────────────────────────────────────────
+
+async def get_guest_llm_settings(guest_id: str) -> dict[str, Any]:
+    r = get_redis()
+    raw = await r.get(f"guest:{guest_id}:llm_settings")
+    if raw is None:
+        return {}
+    return json.loads(raw)
+
+
+async def set_guest_llm_settings(guest_id: str, settings_obj: dict[str, Any]) -> None:
+    r = get_redis()
+    await r.setex(f"guest:{guest_id}:llm_settings", GUEST_SETTINGS_TTL, json.dumps(settings_obj))
+
+
+async def delete_guest_llm_settings(guest_id: str) -> None:
+    r = get_redis()
+    await r.delete(f"guest:{guest_id}:llm_settings")
 
 
 # ── BM25 index cache helpers ───────────────────────────────────────────────

@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import clsx from "clsx";
-import { BookOpen, Map, ListChecks, FileText, PanelLeftClose, PanelLeft, RotateCcw } from "lucide-react";
+import { BookOpen, Map, ListChecks, FileText, PanelLeftClose, PanelLeft, RotateCcw, Settings, SquareX } from "lucide-react";
 
 import { usePaperStore } from "@/store/paperStore";
 import { useChatStore } from "@/store/chatStore";
 import type { Citation } from "@/types";
+import { api } from "@/api/client";
 
 import { UploadZone } from "@/components/UploadZone";
 import { PaperList } from "@/components/PaperList";
@@ -12,6 +13,7 @@ import { PDFViewer } from "@/components/PDFViewer";
 import { QAPanel } from "@/components/QAPanel";
 import { TrailTracker } from "@/components/TrailTracker";
 import { ConceptMap } from "@/components/ConceptMap";
+import { SettingsModal } from "@/components/SettingsModal";
 
 type AssistantTab = "answer" | "trail" | "concepts";
 type QueuedQuestion = { id?: string; question: string; nonce: number } | null;
@@ -44,7 +46,7 @@ function renderAssistantTab(tab: AssistantTab) {
 }
 
 export default function App() {
-  const { activePaper, activeSession, questions, loadPapers, restoreActive, selectPaper, newSession } = usePaperStore();
+  const { activePaper, activeSession, questions, loadPapers, restoreActive, selectPaper, newSession, endSession } = usePaperStore();
   const { messages } = useChatStore();
 
   const [highlights, setHighlights] = useState<Citation[]>([]);
@@ -52,6 +54,9 @@ export default function App() {
   const [jumpCounter, setJumpCounter] = useState(0);
   const [activeTab, setActiveTab] = useState<AssistantTab>("answer");
   const [queuedQuestion, setQueuedQuestion] = useState<QueuedQuestion>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [endConfirmOpen, setEndConfirmOpen] = useState(false);
+  const [newChatConfirmOpen, setNewChatConfirmOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true"
   );
@@ -62,6 +67,14 @@ export default function App() {
     // because Zustand persist has already rehydrated messages from localStorage.
     restoreActive().catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    api.getLLMSettings()
+      .then((s) => {
+        if (!s.has_key) setSettingsOpen(true);
+      })
+      .catch(() => {});
+  }, []);
 
   const handleSelectPaper = useCallback(async (id: string) => {
     // Clicking the currently active paper is a no-op
@@ -119,6 +132,7 @@ export default function App() {
   const effectiveSidebarCollapsed = isConceptsWorkspace || sidebarCollapsed;
 
   return (
+    <>
     <div className="flex h-screen overflow-hidden bg-surface-900 text-gray-100">
       {/* ── Left sidebar ──────────────────────────────────────────────── */}
       <aside className={clsx(
@@ -132,9 +146,14 @@ export default function App() {
               {!effectiveSidebarCollapsed && <span className="font-semibold text-sm">PaperPilot</span>}
             </div>
             {!effectiveSidebarCollapsed && (
-              <button className="btn-ghost p-1" onClick={toggleSidebar} title="Collapse sidebar">
-                <PanelLeftClose className="w-4 h-4 text-gray-500" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button className="btn-ghost p-1" onClick={() => setSettingsOpen(true)} title="Settings">
+                  <Settings className="w-4 h-4 text-gray-500" />
+                </button>
+                <button className="btn-ghost p-1" onClick={toggleSidebar} title="Collapse sidebar">
+                  <PanelLeftClose className="w-4 h-4 text-gray-500" />
+                </button>
+              </div>
             )}
           </div>
           {!effectiveSidebarCollapsed && <UploadZone />}
@@ -215,16 +234,28 @@ export default function App() {
                       </p>
                     )}
                   </div>
-                  {messages.length > 0 && (
-                    <button
-                      onClick={handleRestart}
-                      className="flex-shrink-0 flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors mt-0.5"
-                      title="Start a new chat for this paper"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      New chat
-                    </button>
-                  )}
+                  <div className="flex-shrink-0 flex items-center gap-3 mt-0.5">
+                    {activeSession && (
+                      <button
+                        onClick={() => setEndConfirmOpen(true)}
+                        className="flex items-center gap-1 text-xs text-gray-500 hover:text-rose-300 transition-colors"
+                        title="End this session"
+                      >
+                        <SquareX className="w-3.5 h-3.5" />
+                        End
+                      </button>
+                    )}
+                    {messages.length > 0 && (
+                      <button
+                        onClick={() => setNewChatConfirmOpen(true)}
+                        className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                        title="Start a new chat for this paper"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        New chat
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Tab bar */}
@@ -279,5 +310,64 @@ export default function App() {
         </div>
       )}
     </div>
+    <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+    {endConfirmOpen && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="absolute inset-0 bg-black/60" onClick={() => setEndConfirmOpen(false)} />
+        <div className="relative w-[460px] max-w-[calc(100vw-24px)] rounded-2xl border border-white/10 bg-surface-900 shadow-xl">
+          <div className="px-4 py-3 border-b border-white/10">
+            <div className="text-sm font-semibold text-gray-100">End session?</div>
+            <div className="text-xs text-gray-500 mt-1">
+              This will end the current session. You can start a new session anytime.
+            </div>
+          </div>
+          <div className="px-4 py-3 flex items-center justify-end gap-2">
+            <button className="btn-ghost px-3 py-2 text-xs" onClick={() => setEndConfirmOpen(false)}>
+              Cancel
+            </button>
+            <button
+              className="px-3 py-2 rounded-xl text-xs font-semibold bg-rose-600/30 text-rose-200 hover:bg-rose-600/40"
+              onClick={async () => {
+                setEndConfirmOpen(false);
+                setHighlights([]);
+                setTargetPage(undefined);
+                setActiveTab("answer");
+                await endSession();
+              }}
+            >
+              End session
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    {newChatConfirmOpen && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="absolute inset-0 bg-black/60" onClick={() => setNewChatConfirmOpen(false)} />
+        <div className="relative w-[460px] max-w-[calc(100vw-24px)] rounded-2xl border border-white/10 bg-surface-900 shadow-xl">
+          <div className="px-4 py-3 border-b border-white/10">
+            <div className="text-sm font-semibold text-gray-100">Start a new chat?</div>
+            <div className="text-xs text-gray-500 mt-1">
+              This will create a new session for this paper. Your previous chat will still be available in history.
+            </div>
+          </div>
+          <div className="px-4 py-3 flex items-center justify-end gap-2">
+            <button className="btn-ghost px-3 py-2 text-xs" onClick={() => setNewChatConfirmOpen(false)}>
+              Cancel
+            </button>
+            <button
+              className="px-3 py-2 rounded-xl text-xs font-semibold bg-white/10 text-gray-100 hover:bg-white/15"
+              onClick={async () => {
+                setNewChatConfirmOpen(false);
+                await handleRestart();
+              }}
+            >
+              New chat
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

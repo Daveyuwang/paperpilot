@@ -1,5 +1,5 @@
 import type {
-  Paper, PaperListItem, Session, GuideQuestion, Chunk, ConceptMap
+  Paper, PaperListItem, Session, GuideQuestion, Chunk, ConceptMap, LLMSettingsOut, LLMSettingsIn
 } from "@/types";
 import { getGuestId } from "@/store/guestStore";
 
@@ -89,5 +89,18 @@ export const api = {
 
   regenerateConceptMap(paperId: string): Promise<{ status: string; paper_id: string }> {
     return request(`/api/concepts/${paperId}/regenerate`, { method: "POST" });
+  },
+
+  // Settings
+  getLLMSettings(): Promise<LLMSettingsOut> {
+    return request("/api/settings/llm");
+  },
+
+  setLLMSettings(payload: LLMSettingsIn): Promise<LLMSettingsOut> {
+    return request("/api/settings/llm", { method: "PUT", body: JSON.stringify(payload) });
+  },
+
+  clearLLMSettings(): Promise<LLMSettingsOut> {
+    return request("/api/settings/llm", { method: "DELETE" });
   },
 };

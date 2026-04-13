@@ -36,6 +36,14 @@ function getSessionByPaperMap(): Record<string, string> {
   } catch { return {}; }
 }
 
+function clearSessionForPaper(paperId: string) {
+  const map = getSessionByPaperMap();
+  if (map[paperId]) {
+    delete map[paperId];
+    localStorage.setItem(SESSION_BY_PAPER_KEY, JSON.stringify(map));
+  }
+}
+
 // ── Store ─────────────────────────────────────────────────────────────────
 
 interface PaperStore {
@@ -60,6 +68,8 @@ interface PaperStore {
   pollPaperStatus: (id: string) => void;
   /** Create a fresh session for the currently active paper (for "New chat"). */
   newSession: () => Promise<void>;
+  /** Explicitly end the current session. */
+  endSession: () => Promise<void>;
   // Restore active paper+session from localStorage on app startup
   restoreActive: () => Promise<string[] | null>;
 }
@@ -227,6 +237,20 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
       set({ activeSession: session });
     } catch (e) {
       console.debug("[PaperPilot] new_session_fail", { paperId: activePaper.id, error: String(e) });
+    }
+  },
+
+  endSession: async () => {
+    const { activePaper, activeSession } = get();
+    if (!activePaper || !activeSession) return;
+    try {
+      await api.deleteSession(activeSession.id).catch(() => {});
+    } finally {
+      clearActive();
+      clearSessionForPaper(activePaper.id);
+      const { useChatStore } = await import("@/store/chatStore");
+      useChatStore.getState().clearSession(activeSession.id);
+      set({ activeSession: null });
     }
   },
 

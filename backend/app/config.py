@@ -27,7 +27,13 @@ class Settings(BaseSettings):
     qdrant_port: int = 6333
     qdrant_collection: str = "paperpilot_chunks"
 
-    # Anthropic
+    # LLM (server-default; per-guest settings may override via Redis)
+    llm_protocol: str = "anthropic"  # openai_compatible | anthropic | gemini
+    llm_base_url: str | None = None
+    llm_api_key: str = ""
+    llm_model: str = "claude-sonnet-4-6"
+
+    # Backward-compatible Anthropic envs (deprecated)
     anthropic_api_key: str = ""
     claude_model: str = "claude-sonnet-4-6"
 

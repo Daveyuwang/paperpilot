@@ -4,13 +4,14 @@ All fields are serializable to/from Redis JSON.
 """
 from __future__ import annotations
 from typing import Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 class AgentState(BaseModel):
     # Identifiers
     session_id: str
     paper_id: str
+    guest_id: str = ""
 
     # Current turn inputs
     question: str = ""
@@ -68,8 +69,9 @@ class AgentState(BaseModel):
     # Per-turn trace metadata — populated by nodes, consumed by graph's request_trace log
     trace_metadata: dict = Field(default_factory=dict)
 
-    # Streaming callback (not serialized)
-    _stream_callback: Any = None
+    # Private runtime-only attrs (not serialized)
+    _stream_callback: Any = PrivateAttr(default=None)
+    _llm_client: Any = PrivateAttr(default=None)
 
     class Config:
         arbitrary_types_allowed = True
