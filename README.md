@@ -16,15 +16,20 @@ Agent-driven research assistant for PDFs: hybrid RAG, intent-routed multi-step L
 
 <img src="screenshots/concept.png" width="480" alt="Concept map" />
 
-**Prerequisites:** Docker + Docker Compose
+**Prerequisites:** Docker + Docker Compose (recommended)
 
 ## Local (Docker)
 
 ```bash
 cp .env.example .env
 
-make up
-make migrate
+make setup
+```
+
+Or:
+
+```bash
+./scripts/setup.sh
 ```
 
 ## Dev (no Docker)
@@ -35,6 +40,10 @@ Prereqs: Node 20+, Python 3.11+.
 # .env → local Postgres, Redis, Qdrant URLs
 
 cd backend
+conda create -n paperpilot -y -c conda-forge python=3.11 nodejs=20
+conda activate paperpilot
+
+# Install Python deps
 pip install -r requirements.txt
 alembic upgrade head
 uvicorn app.main:app --reload

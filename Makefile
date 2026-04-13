@@ -1,4 +1,4 @@
-.PHONY: help up down build logs shell-backend shell-worker migrate reset-db \
+.PHONY: help up down build logs shell-backend shell-worker migrate reset-db setup \
         lint-backend format-backend test-backend
 
 help:
@@ -6,6 +6,7 @@ help:
 	@echo "  make up              Start all services"
 	@echo "  make down            Stop all services"
 	@echo "  make build           Rebuild all images"
+	@echo "  make setup           Build, up, migrate (one-shot)"
 	@echo "  make logs            Tail logs for all services"
 	@echo "  make logs-backend    Tail backend logs"
 	@echo "  make logs-worker     Tail worker logs"
@@ -19,6 +20,11 @@ help:
 up:
 	cp -n .env.example .env 2>/dev/null || true
 	docker compose up -d
+
+setup:
+	cp -n .env.example .env 2>/dev/null || true
+	docker compose up -d --build
+	$(MAKE) migrate
 
 down:
 	docker compose down
