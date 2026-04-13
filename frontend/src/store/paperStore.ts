@@ -68,7 +68,7 @@ interface PaperStore {
   pollPaperStatus: (id: string) => void;
   /** Create a fresh session for the currently active paper (for "New chat"). */
   newSession: () => Promise<void>;
-  /** Explicitly end the current session. */
+  /** Full reset: delete all papers and clear local state. */
   endSession: () => Promise<void>;
   // Restore active paper+session from localStorage on app startup
   restoreActive: () => Promise<string[] | null>;
@@ -241,16 +241,22 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
   },
 
   endSession: async () => {
-    const { activePaper, activeSession } = get();
-    if (!activePaper || !activeSession) return;
+    const prev = get();
     try {
-      await api.deleteSession(activeSession.id).catch(() => {});
+      const papers = await api.listPapers().catch(() => prev.papers);
+      for (const p of papers) {
+        try {
+          await api.deletePaper(p.id);
+        } catch {}
+      }
     } finally {
       clearActive();
-      clearSessionForPaper(activePaper.id);
+      for (const p of prev.papers) clearSessionForPaper(p.id);
       const { useChatStore } = await import("@/store/chatStore");
-      useChatStore.getState().clearSession(activeSession.id);
-      set({ activeSession: null });
+      // Clear persisted chat storage too.
+      try { localStorage.removeItem("paperpilot-chat"); } catch {}
+      useChatStore.getState().clearChat();
+      set({ papers: [], activePaper: null, activeSession: null, questions: [], chunks: [] });
     }
   },
 

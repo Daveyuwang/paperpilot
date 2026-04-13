@@ -16,13 +16,11 @@ CONFIDENCE_THRESHOLD = 0.5  # below this, try Nougat fallback
 
 def run_ingestion_job(paper_id: str, pdf_path: str) -> dict:
     """Run the full PDF ingestion pipeline synchronously."""
-    from datetime import datetime, timezone
     from sqlalchemy import create_engine, delete
     from sqlalchemy.orm import Session as SyncSession
 
     from app.ingestion.pdf_parser import parse_pdf, parse_pdf_nougat
     from app.ingestion.chunker import split_into_chunks
-    from app.ingestion.concept_extractor import extract_concept_map
     from app.retrieval.embedder import embed_chunks
     from app.retrieval.bm25_index import build_bm25_index, serialize_bm25
     from app.retrieval.qdrant_client import upsert_chunks
@@ -165,38 +163,43 @@ def run_ingestion_job(paper_id: str, pdf_path: str) -> dict:
         if _abort_if_deleted("after_bm25"):
             return {"paper_id": paper_id, "status": "deleted"}
 
-        # ── 6. LLM concept map → Postgres ────────────────────────────────
-        concept_map_data = extract_concept_map(
-            paper_title=parsed.get("title", ""),
-            paper_abstract=parsed.get("abstract", ""),
-            chunks=chunks,
-            guest_id=guest_id_for_llm,
-        )
-        if _abort_if_deleted("after_concept_extract"):
-            return {"paper_id": paper_id, "status": "deleted"}
-        with SyncSession(engine) as db:
-            record = PaperConceptMap(
-                paper_id=paper_id,
-                data=concept_map_data,
-                generated_at=datetime.now(timezone.utc),
-            )
-            db.merge(record)
-            db.commit()
-        logger.info(
-            "concept_map_stored",
-            paper_id=paper_id,
-            nodes=len(concept_map_data.get("nodes", [])),
-            edges=len(concept_map_data.get("edges", [])),
-        )
-        if _abort_if_deleted("after_concept_store"):
-            return {"paper_id": paper_id, "status": "deleted"}
+        # ── 6. Scaffold pass: guided questions ────────────────────────────
+        language_pref = "en"
+        llm_protocol = settings.llm_protocol
+        llm_base_url = settings.llm_base_url
+        llm_api_key = settings.llm_api_key or (settings.anthropic_api_key if settings.llm_protocol == "anthropic" else "")
+        llm_model = settings.llm_model or settings.claude_model
+        if guest_id_for_llm:
+            try:
+                import redis as sync_redis
 
-        # ── 7. Scaffold pass: guided questions ────────────────────────────
+                r2 = sync_redis.from_url(settings.redis_url, decode_responses=True)
+                raw_settings = r2.get(f"guest:{guest_id_for_llm}:llm_settings")
+                if raw_settings:
+                    import json as _json
+
+                    s = _json.loads(raw_settings)
+                    language_pref = (s.get("language") or "en").strip()
+                    llm_protocol = s.get("protocol") or llm_protocol
+                    llm_base_url = s.get("base_url") or llm_base_url
+                    llm_api_key = s.get("api_key") or llm_api_key
+                    llm_model = s.get("model") or llm_model
+            except Exception:
+                language_pref = "en"
+
+        if language_pref == "zh-Hant":
+            language_pref = "zh-TW"
+
         questions = generate_question_trail(
             title=parsed.get("title", ""),
             abstract=parsed.get("abstract", ""),
             section_headers=parsed.get("section_headers", []),
             guest_id=guest_id_for_llm,
+            language=language_pref,
+            protocol=llm_protocol,
+            base_url=llm_base_url,
+            api_key=llm_api_key,
+            model=llm_model,
         )
         if _abort_if_deleted("after_scaffold_generate"):
             return {"paper_id": paper_id, "status": "deleted"}
@@ -216,6 +219,15 @@ def run_ingestion_job(paper_id: str, pdf_path: str) -> dict:
             return {"paper_id": paper_id, "status": "deleted"}
 
         _update_status(PaperStatus.ready)
+        logger.info("ingestion_ready", paper_id=paper_id)
+
+        # Kick off concept map generation in background (does not block readiness).
+        try:
+            regenerate_concept_map.apply_async(args=[paper_id], queue="default")
+            logger.info("concept_map_queued", paper_id=paper_id)
+        except Exception as exc:
+            logger.warning("concept_map_queue_failed", paper_id=paper_id, error=str(exc))
+
         logger.info("ingestion_complete", paper_id=paper_id)
         return {"paper_id": paper_id, "status": "ready"}
 
@@ -233,9 +245,9 @@ def ingest_paper(self, paper_id: str, pdf_path: str) -> dict:
     2. Chunk text
     3. Embed chunks → Qdrant
     4. Build BM25 index → Redis
-    5. LLM concept map → Postgres (PaperConceptMap)
-    6. Generate guided question trail (Claude)
-    7. Update paper status in Postgres
+    5. Generate guided question trail
+    6. Update paper status in Postgres (ready)
+    7. Queue concept map generation (non-blocking)
     """
     try:
         return run_ingestion_job(paper_id, pdf_path)

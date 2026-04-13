@@ -5,13 +5,13 @@ Uses Claude to produce 8–15 grounded, typed concept nodes with semantic edges.
 Runs synchronously inside the Celery worker (same pattern as scaffold_pass.py).
 """
 from __future__ import annotations
-import asyncio
 import json
 import re
 import structlog
 
 from app.config import get_settings
-from app.llm import LLMClient, resolve_llm_settings_for_guest
+from anthropic import Anthropic
+import httpx
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -242,16 +242,69 @@ def extract_concept_map(
     )
 
     try:
-        async def _run() -> str:
-            resolved = await resolve_llm_settings_for_guest(guest_id)
-            llm = LLMClient(resolved)
-            return await llm.create_text(
-                messages=[{"role": "user", "content": prompt}],
+        # Resolve LLM settings synchronously (Celery-safe).
+        protocol = (settings.llm_protocol or "anthropic").strip().lower()
+        base_url = settings.llm_base_url
+        api_key = settings.llm_api_key or (settings.anthropic_api_key if protocol == "anthropic" else "")
+        model = settings.llm_model or settings.claude_model or "claude-sonnet-4-6"
+
+        if guest_id:
+            try:
+                import redis as sync_redis
+                import json as _json
+
+                r = sync_redis.from_url(settings.redis_url, decode_responses=True)
+                raw_settings = r.get(f"guest:{guest_id}:llm_settings")
+                if raw_settings:
+                    s = _json.loads(raw_settings)
+                    protocol = (s.get("protocol") or protocol).strip().lower()
+                    base_url = s.get("base_url") or base_url
+                    api_key = s.get("api_key") or api_key
+                    model = s.get("model") or model
+            except Exception as exc:
+                logger.warning("concept_extraction_settings_load_failed", error=str(exc))
+
+        raw_text = ""
+        if protocol == "anthropic":
+            client = Anthropic(api_key=api_key)
+            resp = client.messages.create(
+                model=model,
                 max_tokens=4096,
                 temperature=0.2,
+                messages=[{"role": "user", "content": prompt}],
             )
-
-        raw_text = asyncio.run(_run()).strip()
+            raw_text = (resp.content[0].text or "").strip()
+        elif protocol in ("openai", "openai_compatible"):
+            url_base = (base_url or "https://api.openai.com/v1").rstrip("/")
+            url = url_base + "/chat/completions"
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2,
+                "max_tokens": 4096,
+                "stream": False,
+            }
+            with httpx.Client(timeout=60) as client:
+                r = client.post(url, headers=headers, json=payload)
+                r.raise_for_status()
+                data = r.json()
+                raw_text = (data["choices"][0]["message"]["content"] or "").strip()
+        elif protocol == "gemini":
+            host = (base_url or "https://generativelanguage.googleapis.com").rstrip("/")
+            url = f"{host}/v1beta/models/{model}:generateContent"
+            params = {"key": api_key}
+            payload = {
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096},
+            }
+            with httpx.Client(timeout=60) as client:
+                r = client.post(url, params=params, json=payload)
+                r.raise_for_status()
+                data = r.json()
+                raw_text = (data["candidates"][0]["content"]["parts"][0].get("text") or "").strip()
+        else:
+            raise ValueError(f"Unsupported LLM protocol: {protocol}")
 
         # Extract the JSON object even if the model wraps it in ``` fences
         json_match = re.search(r'\{[\s\S]*\}', raw_text)

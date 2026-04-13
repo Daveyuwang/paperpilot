@@ -3,14 +3,13 @@ One-time scaffold pass: generates the guided question trail using Claude.
 Called synchronously from the Celery worker after ingestion.
 """
 from __future__ import annotations
-import asyncio
 import json
 import re
 import structlog
 
 from app.config import get_settings
-from app.llm import LLMClient, resolve_llm_settings_for_guest
-from app.db.redis_client import get_guest_llm_settings
+from anthropic import Anthropic
+import httpx
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -38,12 +37,33 @@ Output a JSON array. Each item must have:
 Respond ONLY with valid JSON, no markdown fences."""
 
 
+def _language_instruction(lang: str) -> str:
+    lang = (lang or "en").strip()
+    return {
+        "en": "Write all questions in English.",
+        "zh-CN": "Write all questions in Simplified Chinese.",
+        "zh-TW": "Write all questions in Traditional Chinese.",
+        "ja": "Write all questions in Japanese.",
+        "ko": "Write all questions in Korean.",
+        "es": "Write all questions in Spanish.",
+        "fr": "Write all questions in French.",
+        "de": "Write all questions in German.",
+        "pt-BR": "Write all questions in Brazilian Portuguese.",
+        "ru": "Write all questions in Russian.",
+    }.get(lang, f"Write all questions in {lang}.")
+
+
 def generate_question_trail(
     title: str,
     abstract: str,
     section_headers: list[str],
     *,
     guest_id: str = "",
+    language: str = "en",
+    protocol: str = "anthropic",
+    base_url: str | None = None,
+    api_key: str = "",
+    model: str = "claude-sonnet-4-6",
 ) -> list[dict]:
     """
     Call Claude to generate a 10-15 question guided trail.
@@ -60,22 +80,58 @@ Section Headers:
 Generate the guided question trail."""
 
     try:
-        async def _run() -> str:
-            resolved = await resolve_llm_settings_for_guest(guest_id)
-            llm = LLMClient(resolved)
-            prefs = await get_guest_llm_settings(guest_id) if guest_id else {}
-            lang = (prefs.get("language") or "en").strip()
-            if lang == "zh-Hant":
-                lang = "zh-TW"
-            lang_note = f"[Output language: {lang}.]\n\n"
-            return await llm.create_text(
-                system=lang_note + SCAFFOLD_SYSTEM,
-                messages=[{"role": "user", "content": user_content}],
-                max_tokens=2048,
-                temperature=0.2,
-            )
+        lang_note = _language_instruction(language) + "\n\n"
+        system = lang_note + SCAFFOLD_SYSTEM
 
-        raw = asyncio.run(_run()).strip()
+        raw = ""
+        proto = (protocol or "anthropic").strip().lower()
+        if proto == "anthropic":
+            client = Anthropic(api_key=api_key)
+            resp = client.messages.create(
+                model=model,
+                max_tokens=2048,
+                system=system,
+                messages=[{"role": "user", "content": user_content}],
+            )
+            raw = (resp.content[0].text or "").strip()
+        elif proto in ("openai", "openai_compatible"):
+            url_base = (base_url or "https://api.openai.com/v1").rstrip("/")
+            url = url_base + "/chat/completions"
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_content},
+                ],
+                "temperature": 0.2,
+                "max_tokens": 2048,
+                "stream": False,
+            }
+            with httpx.Client(timeout=60) as client:
+                r = client.post(url, headers=headers, json=payload)
+                r.raise_for_status()
+                data = r.json()
+                raw = (data["choices"][0]["message"]["content"] or "").strip()
+        elif proto == "gemini":
+            host = (base_url or "https://generativelanguage.googleapis.com").rstrip("/")
+            url = f"{host}/v1beta/models/{model}:generateContent"
+            params = {"key": api_key}
+            payload = {
+                "contents": [
+                    {"role": "user", "parts": [{"text": system}]},
+                    {"role": "user", "parts": [{"text": user_content}]},
+                ],
+                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2048},
+            }
+            with httpx.Client(timeout=60) as client:
+                r = client.post(url, params=params, json=payload)
+                r.raise_for_status()
+                data = r.json()
+                raw = (data["candidates"][0]["content"]["parts"][0].get("text") or "").strip()
+        else:
+            raise ValueError(f"Unsupported LLM protocol: {proto}")
+
         # Strip markdown fences if present
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw)

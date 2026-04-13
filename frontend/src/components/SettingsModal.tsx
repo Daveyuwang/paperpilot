@@ -200,7 +200,17 @@ export function SettingsModal({ open, onClose }: Props) {
           </div>
 
           <div className="space-y-2">
-            <label className="text-xs font-semibold text-gray-400">API key</label>
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-xs font-semibold text-gray-400">API key</label>
+              <span className={clsx(
+                "text-[11px] font-semibold px-2 py-0.5 rounded-full border",
+                remoteHasKey
+                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                  : "border-amber-500/30 bg-amber-500/10 text-amber-200"
+              )}>
+                {remoteHasKey ? "Saved" : "Missing"}
+              </span>
+            </div>
             <div className="flex items-center gap-2">
               <input
                 className="flex-1 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 placeholder:text-gray-600 outline-none focus:border-white/20"
@@ -219,7 +229,7 @@ export function SettingsModal({ open, onClose }: Props) {
               </button>
             </div>
             <div className="text-[11px] text-gray-600">
-              {remoteHasKey ? "A key is currently saved for this guest." : "No key saved yet."}
+              {remoteHasKey ? "A key is saved for this guest." : "No key saved yet — you must add one to use the app."}
             </div>
           </div>
         </div>

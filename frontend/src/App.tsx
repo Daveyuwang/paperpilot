@@ -57,6 +57,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [endConfirmOpen, setEndConfirmOpen] = useState(false);
   const [newChatConfirmOpen, setNewChatConfirmOpen] = useState(false);
+  const [endLockSeconds, setEndLockSeconds] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true"
   );
@@ -75,6 +76,15 @@ export default function App() {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!endConfirmOpen) return;
+    setEndLockSeconds(5);
+    const t = setInterval(() => {
+      setEndLockSeconds((v) => (v <= 1 ? 0 : v - 1));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [endConfirmOpen]);
 
   const handleSelectPaper = useCallback(async (id: string) => {
     // Clicking the currently active paper is a no-op
@@ -129,7 +139,7 @@ export default function App() {
     .filter(Boolean) as NonNullable<Citation["bbox"]>[];
 
   const isConceptsWorkspace = activeTab === "concepts";
-  const effectiveSidebarCollapsed = isConceptsWorkspace || sidebarCollapsed;
+  const effectiveSidebarCollapsed = sidebarCollapsed;
 
   return (
     <>
@@ -160,11 +170,9 @@ export default function App() {
         </div>
         {effectiveSidebarCollapsed ? (
           <div className="flex-1 flex flex-col items-center pt-2">
-            {!isConceptsWorkspace && (
-              <button className="btn-ghost p-2" onClick={toggleSidebar} title="Expand sidebar">
-                <PanelLeft className="w-4 h-4 text-gray-500" />
-              </button>
-            )}
+            <button className="btn-ghost p-2" onClick={toggleSidebar} title="Expand sidebar">
+              <PanelLeft className="w-4 h-4 text-gray-500" />
+            </button>
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto px-2 py-2">
@@ -317,8 +325,8 @@ export default function App() {
         <div className="relative w-[460px] max-w-[calc(100vw-24px)] rounded-2xl border border-white/10 bg-surface-900 shadow-xl">
           <div className="px-4 py-3 border-b border-white/10">
             <div className="text-sm font-semibold text-gray-100">End session?</div>
-            <div className="text-xs text-gray-500 mt-1">
-              This will end the current session. You can start a new session anytime.
+            <div className="mt-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+              This will delete all uploaded papers and clear local history.
             </div>
           </div>
           <div className="px-4 py-3 flex items-center justify-end gap-2">
@@ -326,7 +334,13 @@ export default function App() {
               Cancel
             </button>
             <button
-              className="px-3 py-2 rounded-xl text-xs font-semibold bg-rose-600/30 text-rose-200 hover:bg-rose-600/40"
+              className={clsx(
+                "px-3 py-2 rounded-xl text-xs font-semibold",
+                endLockSeconds > 0
+                  ? "bg-white/5 text-gray-600 cursor-not-allowed"
+                  : "bg-rose-600/30 text-rose-200 hover:bg-rose-600/40"
+              )}
+              disabled={endLockSeconds > 0}
               onClick={async () => {
                 setEndConfirmOpen(false);
                 setHighlights([]);
@@ -335,7 +349,7 @@ export default function App() {
                 await endSession();
               }}
             >
-              End session
+              {endLockSeconds > 0 ? `End session (${endLockSeconds})` : "End session"}
             </button>
           </div>
         </div>

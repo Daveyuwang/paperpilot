@@ -26,6 +26,8 @@ SECTION_PATTERNS = [
     r"^\d+\.?\s+\w+",  # numbered sections
 ]
 _SECTION_RE = re.compile("|".join(SECTION_PATTERNS), re.IGNORECASE)
+_ARXIV_LINE_RE = re.compile(r"^arxiv:\s*\d{4}\.\d{4,5}(?:v\d+)?", re.IGNORECASE)
+_ARXIV_META_RE = re.compile(r"\[\s*cs\.[a-z]{2}\s*\]", re.IGNORECASE)
 
 
 def parse_pdf(pdf_path: str) -> dict:
@@ -141,7 +143,15 @@ def _extract_title(blocks_by_page: list[list[dict]]) -> str | None:
     candidates = sorted(first_page, key=lambda b: b.get("font_size", 0), reverse=True)
     for c in candidates:
         text = c["text"].strip()
-        if 10 < len(text) < 300:
+        if not (10 < len(text) < 300):
+            continue
+        # Skip common non-title metadata lines (arXiv stamps, categories, dates)
+        if _ARXIV_LINE_RE.match(text):
+            continue
+        if _ARXIV_META_RE.search(text) and "arxiv" in text.lower():
+            continue
+        if text.lower().startswith(("submitted", "preprint", "version", "accepted")) and len(text) < 80:
+            continue
             return text
     return None
 

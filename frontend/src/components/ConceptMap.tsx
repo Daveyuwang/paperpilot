@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ArrowLeft,
   BookOpen,
   ExternalLink,
   Info,
@@ -575,6 +576,7 @@ export function ConceptMap({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState(false);
+  const [autoPolling, setAutoPolling] = useState(false);
   const [selectedNode, setSelectedNode] = useState<ConceptNode | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("overview");
   const [legendOpen, setLegendOpen] = useState(false);
@@ -590,15 +592,51 @@ export function ConceptMap({
     setViewMode("overview");
     setConceptMap(null);
     setSelectedNode(null);
+    setAutoPolling(false);
 
     api.getConceptMap(paperId)
       .then((data) => {
         setConceptMap(data);
         setSelectedNode(getPrimaryNode(data));
+        if (!data.generated) setAutoPolling(true);
       })
       .catch((nextError) => setError(String(nextError)))
       .finally(() => setLoading(false));
   }, [paperId]);
+
+  useEffect(() => {
+    if (!autoPolling) return;
+    let stopped = false;
+    const startedAt = Date.now();
+
+    const poll = async () => {
+      if (stopped) return;
+      if (Date.now() - startedAt > 120_000) {
+        setAutoPolling(false);
+        return;
+      }
+      try {
+        const data = await api.getConceptMap(paperId);
+        if (stopped) return;
+        setConceptMap(data);
+        if (data.generated) {
+          setSelectedNode(getPrimaryNode(data));
+          setViewMode("overview");
+          setAutoPolling(false);
+          return;
+        }
+      } catch {
+        // Keep polling; transient errors shouldn't force manual regenerate.
+      }
+      setTimeout(poll, 4000);
+    };
+
+    const t = setTimeout(poll, 2500);
+    return () => {
+      stopped = true;
+      clearTimeout(t);
+    };
+  }, [autoPolling, paperId]);
 
   useEffect(() => {
     if (!legendOpen) return;
@@ -911,28 +949,47 @@ export function ConceptMap({
   if (!conceptMap?.generated || conceptMap.nodes.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
-        <p className="text-sm text-gray-400">No concept map for this paper yet.</p>
-        <p className="max-w-xs text-xs text-gray-600">
-          Papers uploaded after the latest update are indexed automatically. You can
-          regenerate for older papers.
-        </p>
         <button
-          onClick={handleRegenerate}
-          disabled={regenerating}
-          className="flex items-center gap-2 rounded-lg border border-accent-600/30 bg-accent-600/20 px-4 py-2 text-xs font-medium text-accent-300 transition-colors hover:bg-accent-600/30 disabled:opacity-50"
+          onClick={() => onTabChange("answer")}
+          className="mb-2 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-gray-300 transition-colors hover:bg-white/10"
+          title="Back to chat"
         >
-          {regenerating ? (
-            <>
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Generating…
-            </>
-          ) : (
-            <>
-              <RefreshCw className="h-3.5 w-3.5" />
-              Generate concept map
-            </>
-          )}
+          <ArrowLeft className="h-3.5 w-3.5" />
+          Back to chat
         </button>
+        <p className="text-sm text-gray-300">
+          {autoPolling ? "Building concept map…" : "No concept map for this paper yet."}
+        </p>
+        <p className="max-w-xs text-xs text-gray-600">
+          {autoPolling
+            ? "You can start chatting now; this will appear automatically when ready."
+            : "If this is an older paper or generation failed, you can regenerate."}
+        </p>
+        {autoPolling && (
+          <div className="flex items-center gap-2 text-xs text-gray-500">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Waiting for background job…
+          </div>
+        )}
+        {!autoPolling && (
+          <button
+            onClick={handleRegenerate}
+            disabled={regenerating}
+            className="flex items-center gap-2 rounded-lg border border-accent-600/30 bg-accent-600/20 px-4 py-2 text-xs font-medium text-accent-300 transition-colors hover:bg-accent-600/30 disabled:opacity-50"
+          >
+            {regenerating ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Generating…
+              </>
+            ) : (
+              <>
+                <RefreshCw className="h-3.5 w-3.5" />
+                Generate concept map
+              </>
+            )}
+          </button>
+        )}
       </div>
     );
   }
@@ -950,6 +1007,15 @@ export function ConceptMap({
           </span>
           <h2 className="truncate text-xs font-semibold text-gray-200 sm:text-sm">{paperTitle}</h2>
         </div>
+
+        <button
+          onClick={() => onTabChange("answer")}
+          className="hidden items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-gray-300 transition-colors hover:bg-white/10 sm:flex"
+          title="Back to chat"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+          Back
+        </button>
 
         <div className="flex items-center rounded-xl border border-white/10 bg-white/[0.03] p-1">
           {(["answer", "trail", "concepts"] as WorkspaceTab[]).map((tab) => (
