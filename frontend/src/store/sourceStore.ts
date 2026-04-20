@@ -27,6 +27,7 @@ interface SourceStore {
   addFromDiscovery: (workspaceId: string, d: DiscoveredSource) => void;
   setLabel: (workspaceId: string, id: string, label: SourceLabel) => void;
   setIncluded: (workspaceId: string, id: string, included: boolean) => void;
+  setAllIncluded: (workspaceId: string, included: boolean) => void;
   removeSource: (workspaceId: string, id: string) => void;
   syncUploads: (workspaceId: string, papers: PaperListItem[]) => void;
 }
@@ -127,6 +128,16 @@ export const useSourceStore = create<SourceStore>()(
             [workspaceId]: existing.map((src) =>
               src.id === id ? { ...src, included } : src
             ),
+          },
+        });
+      },
+
+      setAllIncluded: (workspaceId, included) => {
+        const existing = get().sourcesByWorkspace[workspaceId] ?? [];
+        set({
+          sourcesByWorkspace: {
+            ...get().sourcesByWorkspace,
+            [workspaceId]: existing.map((src) => ({ ...src, included })),
           },
         });
       },

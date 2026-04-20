@@ -4,6 +4,8 @@ import { useWorkspaceStore } from "@/store/workspaceStore";
 import { useAgendaStore } from "@/store/agendaStore";
 import { useSourceStore } from "@/store/sourceStore";
 import { useChatStore } from "@/store/chatStore";
+import { useDeepResearchStore } from "@/store/deepResearchStore";
+import { useProposalPlanStore } from "@/store/proposalPlanStore";
 import type { Citation } from "@/types";
 import { api } from "@/api/client";
 
@@ -22,6 +24,13 @@ import clsx from "clsx";
 import { WifiOff, RefreshCw } from "lucide-react";
 
 type QueuedQuestion = { id?: string; question: string; nonce: number } | null;
+
+const IDLE_STATUSES = ["idle", "needs_clarification", "completed", "blocked", "failed", "interrupted"];
+function syncBeforeUnload() {
+  const drRunning = !IDLE_STATUSES.includes(useDeepResearchStore.getState().status);
+  const ppRunning = !IDLE_STATUSES.includes(useProposalPlanStore.getState().status);
+  window.onbeforeunload = (drRunning || ppRunning) ? (e: BeforeUnloadEvent) => { e.preventDefault(); return ""; } : null;
+}
 
 export default function App() {
   const { papers, activePaper, questions, loadPapers, restoreActive, selectPaper } =
@@ -151,6 +160,16 @@ export default function App() {
     });
     return () => { cancelled = true; };
   }, [activeWs?.id, setConsoleSessionId, getConsoleSessionId]);
+
+  // Warn before page unload if a DR or PP run is active
+  useEffect(() => {
+    const unsubs = [
+      useDeepResearchStore.subscribe(syncBeforeUnload),
+      useProposalPlanStore.subscribe(syncBeforeUnload),
+    ];
+    syncBeforeUnload();
+    return () => { unsubs.forEach((u) => u()); window.onbeforeunload = null; };
+  }, []);
 
   const handleSelectPaper = useCallback(async (id: string) => {
     setHighlights([]);

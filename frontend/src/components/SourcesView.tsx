@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { Search, Plus, Check, ExternalLink, BookOpen, Tag, Trash2, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+import { Search, Plus, Check, ExternalLink, BookOpen, Tag, Trash2, ChevronDown, ChevronRight, Loader2, CheckCircle2, XCircle, Library } from "lucide-react";
 import clsx from "clsx";
 import { useSourceStore } from "@/store/sourceStore";
 import { usePaperStore } from "@/store/paperStore";
@@ -16,7 +16,7 @@ const LABEL_CONFIG: Record<SourceLabel, { color: string; bg: string; label: stri
 const LABELS: SourceLabel[] = ["core", "background", "general"];
 
 export function SourcesView() {
-  const { getSources, getIncludedSources } = useSourceStore();
+  const { getSources, getIncludedSources, getByLabel, setAllIncluded } = useSourceStore();
   const { activePaper } = usePaperStore();
   const { getActiveWorkspace } = useWorkspaceStore();
   const workspace = getActiveWorkspace();
@@ -54,6 +54,9 @@ export function SourcesView() {
   });
   const includedCount = sources.filter((s) => s.included).length;
   const excludedCount = sources.filter((s) => !s.included).length;
+  const coreCount = getByLabel(wid, "core").length;
+  const bgCount = getByLabel(wid, "background").length;
+  const genCount = getByLabel(wid, "general").length;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -62,17 +65,50 @@ export function SourcesView() {
         <section>
           <h3 className="heading-serif text-sm text-surface-700 mb-3">Workspace Sources</h3>
 
-          {/* Filter tabs */}
+          {/* Label summary */}
           {sources.length > 0 && (
-            <div className="flex gap-1 mb-3">
+            <div className="flex items-center gap-3 mb-3 text-[11px]">
+              <span className="text-blue-600">{coreCount} core</span>
+              <span className="text-amber-600">{bgCount} background</span>
+              <span className="text-surface-500">{genCount} general</span>
+            </div>
+          )}
+
+          {/* Filter tabs + batch actions */}
+          {sources.length > 0 && (
+            <div className="flex items-center gap-1 mb-3">
               <FilterTab active={filter === "all"} onClick={() => setFilter("all")} label="All" count={sources.length} />
               <FilterTab active={filter === "included"} onClick={() => setFilter("included")} label="Included" count={includedCount} />
               <FilterTab active={filter === "excluded"} onClick={() => setFilter("excluded")} label="Excluded" count={excludedCount} />
+              <div className="ml-auto flex items-center gap-1">
+                <button
+                  onClick={() => setAllIncluded(wid, true)}
+                  disabled={includedCount === sources.length}
+                  className="p-1 rounded text-emerald-500 hover:bg-emerald-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                  title="Include all"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setAllIncluded(wid, false)}
+                  disabled={excludedCount === sources.length}
+                  className="p-1 rounded text-surface-400 hover:bg-surface-100 disabled:opacity-30 disabled:cursor-not-allowed"
+                  title="Exclude all"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           )}
 
           {filteredSources.length === 0 && sources.length === 0 ? (
-            <p className="text-xs text-surface-400">No sources yet. Upload a paper or discover related work below.</p>
+            <div className="flex flex-col items-center py-8 text-center">
+              <Library className="w-8 h-8 text-surface-200 mb-3" />
+              <p className="text-xs text-surface-500 font-medium mb-1">No sources yet</p>
+              <p className="text-[11px] text-surface-400 max-w-[200px]">
+                Use the Console to discover papers, or search below to find related work.
+              </p>
+            </div>
           ) : filteredSources.length === 0 ? (
             <p className="text-xs text-surface-400">No {filter} sources.</p>
           ) : (

@@ -19,6 +19,8 @@ import type {
 import AnswerCard from "./AnswerCard";
 import { WelcomePanel } from "./WelcomePanel";
 import { DoneMarker } from "./StatusSteps";
+import { MarkdownRenderer } from "./shared/MarkdownRenderer";
+import { AgentActivity } from "./shared/AgentActivity";
 
 interface Props {
   onHighlight: (citations: Citation[]) => void;
@@ -257,6 +259,12 @@ export function QAPanel({
       active_paper_id: null,
       active_deliverable_id: null,
       focused_section_id: null,
+      deliverables: useDeliverableStore.getState().getDeliverables(activeWs.id).map((d) => ({
+        id: d.id,
+        title: d.title,
+        type: d.type,
+        sections: d.sections.map((s) => ({ id: s.id, title: s.title, status: s.content.trim() ? "has_content" : "empty" })),
+      })),
     } : undefined;
 
     sendMessage(question, questionId, undefined, context);
@@ -435,14 +443,20 @@ export function QAPanel({
               {msg.role === "assistant" && (() => {
                 const hasContent = !!(msg.streamingText || msg.answerJson);
 
-                // Phase A: waiting for first token — lightweight activity strip, no bubble
+                // Phase A: waiting for first token — agent activity steps, no bubble
                 if (isCurrentlyStreaming && !hasContent) {
                   return (
-                    <ActivityStrip
-                      statusText={statusText}
-                      showSlowHint={showSlowStatusHint}
-                      onStop={handleStop}
-                    />
+                    <div className="flex items-center gap-3 py-2.5 flex-1 min-w-0">
+                      <AgentActivity statusText={statusText} isActive />
+                      <button
+                        onClick={handleStop}
+                        className="flex items-center gap-1 text-xs text-surface-400 hover:text-red-500 transition-colors ml-auto flex-shrink-0"
+                        title="Stop generating"
+                      >
+                        <Square className="w-3 h-3" />
+                        Stop
+                      </button>
+                    </div>
                   );
                 }
 
@@ -454,20 +468,10 @@ export function QAPanel({
                       {/* Minimal in-bubble streaming indicator (before phase1Complete) */}
                       {isCurrentlyStreaming && !msg.phase1Complete && (
                         <div className="flex items-center justify-between gap-2 mb-3">
-                          <div className="flex items-center gap-2">
-                            <Loader2 className="w-3.5 h-3.5 animate-spin text-accent-500 flex-shrink-0" />
-                            <div className="min-w-0">
-                              <span className="text-xs text-surface-500">{getActivityLabel(statusText)}</span>
-                              {showSlowStatusHint && (
-                                <div className="mt-0.5 text-[11px] text-surface-400">
-                                  Taking a bit longer than expected.
-                                </div>
-                              )}
-                            </div>
-                          </div>
+                          <AgentActivity statusText={statusText} isActive />
                           <button
                             onClick={handleStop}
-                            className="flex items-center gap-1 text-xs text-surface-400 hover:text-red-500 transition-colors"
+                            className="flex items-center gap-1 text-xs text-surface-400 hover:text-red-500 transition-colors flex-shrink-0"
                             title="Stop generating"
                           >
                             <Square className="w-3 h-3" />
@@ -520,9 +524,7 @@ export function QAPanel({
 
                       {/* Legacy plain-text fallback */}
                       {!msg.answerJson && !msg.isStreaming && !msg.streamingText && msg.content && !msg.content.startsWith("[Error]") && (
-                        <p className="text-sm text-surface-500 leading-relaxed whitespace-pre-wrap">
-                          {msg.content}
-                        </p>
+                        <MarkdownRenderer content={msg.content} />
                       )}
 
                       {/* Persistent citation chips */}
@@ -669,10 +671,22 @@ function getActivityLabel(statusText: string): string {
   const s = (statusText ?? "").toLowerCase();
   if (s.includes("classifying") || s.includes("intent")) return "Thinking…";
   if (s.includes("searching the web"))                    return "Searching the web…";
+  if (s.includes("searching academic") || s.includes("academic literature")) return "Searching academic papers…";
+  if (s.includes("citation context"))                     return "Checking citations…";
+  if (s.includes("analyzing source"))                     return "Analyzing sources…";
+  if (s.includes("fetching paper full") || s.includes("reading paper")) return "Reading paper…";
+  if (s.includes("coherence"))                            return "Reviewing document…";
+  if (s.includes("transition"))                           return "Improving flow…";
   if (s.includes("synthesizing"))                         return "Synthesizing results…";
   if (s.includes("retrieving") || s.includes("passage"))  return "Reading the paper…";
+  if (s.includes("searching across") || s.includes("workspace paper")) return "Searching workspace…";
+  if (s.includes("background") || s.includes("external")) return "Fetching background…";
+  if (s.includes("concept map"))                          return "Loading concepts…";
+  if (s.includes("metadata"))                             return "Loading paper info…";
   if (s.includes("writing") || s.includes("generating"))  return "Writing response…";
   if (s.includes("understanding") || s.includes("enriching")) return "Understanding question…";
+  if (s.includes("discover") || s.includes("finding"))    return "Discovering sources…";
+  if (s.includes("draft"))                                return "Drafting content…";
   return "Thinking…";
 }
 
@@ -683,38 +697,6 @@ function shouldShowSlowHint(statusText: string): boolean {
     return false;
   }
   return true;
-}
-
-function ActivityStrip({
-  statusText,
-  showSlowHint,
-  onStop,
-}: {
-  statusText: string;
-  showSlowHint: boolean;
-  onStop: () => void;
-}) {
-  return (
-    <div className="flex items-center gap-3 py-2.5 flex-1 min-w-0">
-      <Loader2 className="w-3.5 h-3.5 animate-spin text-accent-500 flex-shrink-0" />
-      <div className="flex-1 min-w-0">
-        <div className="text-sm text-surface-500">{getActivityLabel(statusText)}</div>
-        {showSlowHint && (
-          <div className="text-shimmer-subtle mt-0.5 text-[11px]">
-            Taking a bit longer than expected.
-          </div>
-        )}
-      </div>
-      <button
-        onClick={onStop}
-        className="flex items-center gap-1 text-xs text-surface-400 hover:text-red-500 transition-colors"
-        title="Stop generating"
-      >
-        <Square className="w-3 h-3" />
-        Stop
-      </button>
-    </div>
-  );
 }
 
 // ── Fade-up wrapper (Phase B: bubble entrance) ────────────────────────────

@@ -19,12 +19,11 @@ import type { DeepResearchRunResult, ClarificationQuestion } from "@/types";
 
 const DR_STAGES = [
   { key: "validating", label: "Validating input" },
-  { key: "preparing_queries", label: "Preparing queries" },
-  { key: "discovering_sources", label: "Discovering sources" },
-  { key: "selecting_sources", label: "Selecting sources" },
-  { key: "generating_outline", label: "Generating outline" },
-  { key: "drafting", label: "Drafting sections" },
-  { key: "updating_agenda", label: "Updating agenda" },
+  { key: "planning", label: "Decomposing research topic" },
+  { key: "executing", label: "Investigating sub-questions" },
+  { key: "evaluating", label: "Evaluating research quality" },
+  { key: "replanning", label: "Generating follow-up questions" },
+  { key: "synthesizing", label: "Producing final report" },
 ];
 
 export function DeepResearchView() {
@@ -34,7 +33,7 @@ export function DeepResearchView() {
   const store = useDeepResearchStore();
   const { status } = store;
 
-  const isRunning = !["idle", "needs_clarification", "completed", "blocked", "failed"].includes(status);
+  const isRunning = !["idle", "needs_clarification", "completed", "blocked", "failed", "interrupted"].includes(status);
 
   return (
     <TaskPageShell
@@ -50,6 +49,7 @@ export function DeepResearchView() {
         />
       )}
       {isRunning && <LiveProgress />}
+      {status === "interrupted" && <InterruptedState />}
       {status === "completed" && store.result && (
         <ResultSummary result={store.result} workspaceId={wid} />
       )}
@@ -68,17 +68,75 @@ export function DeepResearchView() {
 /* ── Live progress (SSE-driven) ─────────────────────────────────────────── */
 
 function LiveProgress() {
-  const { status, currentStageMessage, sectionsProgress, sourcesFound, sourcesSelected } = useDeepResearchStore();
+  const { status, currentStageMessage, sectionsProgress, sourcesFound, sourcesSelected, generatedTitle } = useDeepResearchStore();
 
   return (
-    <WorkflowRunPanel
-      stages={DR_STAGES}
-      currentStatus={status}
-      stageMessage={currentStageMessage}
-      sectionsProgress={sectionsProgress}
-      sourcesFound={sourcesFound}
-      sourcesSelected={sourcesSelected}
-    />
+    <div className="space-y-3">
+      {generatedTitle && (
+        <div className="text-sm font-medium text-surface-700 px-1">
+          {generatedTitle}
+        </div>
+      )}
+      <WorkflowRunPanel
+        stages={DR_STAGES}
+        currentStatus={status}
+        stageMessage={currentStageMessage}
+        sectionsProgress={sectionsProgress}
+        sourcesFound={sourcesFound}
+        sourcesSelected={sourcesSelected}
+      />
+    </div>
+  );
+}
+
+/* ── Interrupted state (shown after page refresh during a run) ─────────── */
+
+function InterruptedState() {
+  const { currentStageMessage, sectionsProgress, generatedTitle, input, reset } = useDeepResearchStore();
+  const completedSections = sectionsProgress.filter((s) => s.status === "done").length;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start gap-3 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200">
+        <RotateCcw className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-amber-800">Research was interrupted</p>
+          <p className="text-xs text-amber-600 mt-1">
+            The page was refreshed while research was running. The stream cannot be resumed.
+          </p>
+        </div>
+      </div>
+
+      {(generatedTitle || currentStageMessage || completedSections > 0) && (
+        <div className="px-4 py-3 rounded-lg bg-surface-50 border border-surface-200 space-y-2">
+          <p className="text-xs font-medium text-surface-600">Last known progress:</p>
+          {generatedTitle && (
+            <p className="text-xs text-surface-700">Title: {generatedTitle}</p>
+          )}
+          {currentStageMessage && (
+            <p className="text-xs text-surface-500">Stage: {currentStageMessage}</p>
+          )}
+          {completedSections > 0 && (
+            <p className="text-xs text-surface-500">
+              {completedSections} of {sectionsProgress.length} sub-questions completed
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="flex items-center gap-2">
+        <button
+          onClick={reset}
+          className="btn-primary flex items-center gap-1.5 px-4 py-2 text-xs"
+        >
+          <RotateCcw className="w-3 h-3" />
+          Start Over
+        </button>
+        <p className="text-[11px] text-surface-400">
+          Topic: {input.topic || "—"}
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -89,7 +147,7 @@ function InputForm({ workspaceId }: { workspaceId: string }) {
   const { input, setInput, startRun, setStatus, setResult, setClarification, setFailed, setBlocked, setCreatedDeliverableId } = store;
   const { getIncludedSources, addFromDiscovery, setLabel } = useSourceStore();
   const { activePaper } = usePaperStore();
-  const { getDeliverables, createDeliverable, applyAIContent, setActiveDeliverable } = useDeliverableStore();
+  const { getDeliverables, createDeliverable, applyAIContent, setActiveDeliverable, renameDeliverable } = useDeliverableStore();
   const { addSystemFollowup } = useAgendaStore();
   const { setSelectedNav, setActiveViewerTab } = useWorkspaceStore();
 
@@ -150,6 +208,17 @@ function InputForm({ workspaceId }: { workspaceId: string }) {
         } else if (type === "progress") {
           if (event.sources_found !== undefined) s.setSourcesFound(event.sources_found as number);
           if (event.sources_selected !== undefined) s.setSourcesSelected(event.sources_selected as number);
+          if (event.message) s.setStageMessage(event.message as string);
+          // Sub-questions from planning phase — show as sections preview
+          if (event.sub_questions) {
+            const qs = event.sub_questions as { id: string; question: string }[];
+            s.initSectionsProgress(qs.map((q) => q.question));
+          }
+          // Sub-reports from execution phase — mark completed
+          if (event.sub_reports_summary) {
+            const reports = event.sub_reports_summary as { sub_question_id: string; confidence: number; question: string }[];
+            reports.forEach((_, i) => s.setSectionStatus(i, "done"));
+          }
         } else if (type === "sections_outline") {
           const titles = event.titles as string[];
           if (titles) s.initSectionsProgress(titles);
@@ -204,9 +273,12 @@ function InputForm({ workspaceId }: { workspaceId: string }) {
           // Create or use existing deliverable
           let delId = input.targetDeliverableId;
           if (!delId) {
-            const newDel = createDeliverable(workspaceId, "deep_research", input.topic || "Deep Research Brief");
+            const title = res.generated_title || input.topic || "Deep Research Brief";
+            const newDel = createDeliverable(workspaceId, "deep_research", title);
             delId = newDel.id;
             s.setCreatedDeliverableId(delId);
+          } else if (res.generated_title) {
+            renameDeliverable(workspaceId, delId, res.generated_title);
           }
 
           // Apply section content

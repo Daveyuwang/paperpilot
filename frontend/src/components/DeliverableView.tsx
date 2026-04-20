@@ -12,87 +12,9 @@ import { useSourceStore } from "@/store/sourceStore";
 import { useRunStore, type SectionPreview } from "@/store/runStore";
 import { usePaperStore } from "@/store/paperStore";
 import { api } from "@/api/client";
+import { MarkdownRenderer } from "./shared/MarkdownRenderer";
 import type { Deliverable, DeliverableType, DeliverableSection, WorkspaceSource } from "@/types";
 
-/* ── Markdown renderer (view mode) ─────────────────────────────────────── */
-
-const INLINE_RE = /(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`)/g;
-
-function renderInline(text: string): React.ReactNode {
-  const parts = text.split(INLINE_RE);
-  if (parts.length === 1) return text;
-  return (
-    <>
-      {parts.map((p, i) => {
-        if (p.startsWith("**") && p.endsWith("**") && p.length > 4)
-          return <strong key={i} className="font-semibold">{p.slice(2, -2)}</strong>;
-        if (p.startsWith("*") && p.endsWith("*") && p.length > 2)
-          return <em key={i}>{p.slice(1, -1)}</em>;
-        if (p.startsWith("`") && p.endsWith("`") && p.length > 2)
-          return <code key={i} className="px-1 py-0.5 rounded bg-surface-100 text-accent-700 text-[0.9em] font-mono">{p.slice(1, -1)}</code>;
-        return p || null;
-      })}
-    </>
-  );
-}
-
-function MarkdownRenderer({ content }: { content: string }) {
-  const lines = content.split("\n");
-  const elements: React.ReactNode[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // Blank line
-    if (!line.trim()) {
-      i++;
-      continue;
-    }
-
-    // Unordered list
-    if (/^[\-\*]\s/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^[\-\*]\s/.test(lines[i])) {
-        items.push(lines[i].replace(/^[\-\*]\s+/, ""));
-        i++;
-      }
-      elements.push(
-        <ul key={`ul-${i}`} className="list-disc list-inside space-y-0.5 my-1">
-          {items.map((item, j) => <li key={j}>{renderInline(item)}</li>)}
-        </ul>
-      );
-      continue;
-    }
-
-    // Ordered list
-    if (/^\d+[\.\)]\s/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^\d+[\.\)]\s/.test(lines[i])) {
-        items.push(lines[i].replace(/^\d+[\.\)]\s+/, ""));
-        i++;
-      }
-      elements.push(
-        <ol key={`ol-${i}`} className="list-decimal list-inside space-y-0.5 my-1">
-          {items.map((item, j) => <li key={j}>{renderInline(item)}</li>)}
-        </ol>
-      );
-      continue;
-    }
-
-    // Regular paragraph
-    const paraLines: string[] = [];
-    while (i < lines.length && lines[i].trim() && !/^[\-\*]\s/.test(lines[i]) && !/^\d+[\.\)]\s/.test(lines[i])) {
-      paraLines.push(lines[i]);
-      i++;
-    }
-    elements.push(
-      <p key={`p-${i}`} className="my-1">{renderInline(paraLines.join(" "))}</p>
-    );
-  }
-
-  return <div className="space-y-0.5">{elements}</div>;
-}
 
 const TYPE_LABELS: Record<DeliverableType, string> = {
   deep_research: "Deep Research",
@@ -970,16 +892,23 @@ function SectionContentEditor({
   }
 
   return (
-    <textarea
-      ref={textareaRef}
-      value={value}
-      onChange={handleChange}
-      onFocus={() => setEditing(true)}
-      onBlur={() => { if (value.trim()) setEditing(false); }}
-      placeholder="Start writing..."
-      autoFocus={editing}
-      className="w-full min-h-[120px] text-sm text-surface-700 leading-relaxed bg-transparent border-none focus:outline-none focus:ring-0 resize-none placeholder:text-surface-300"
-    />
+    <div>
+      <textarea
+        ref={textareaRef}
+        value={value}
+        onChange={handleChange}
+        onFocus={() => setEditing(true)}
+        onBlur={() => { if (value.trim()) setEditing(false); }}
+        placeholder="Start writing..."
+        autoFocus={editing}
+        className="w-full min-h-[120px] text-sm text-surface-700 leading-relaxed bg-transparent border-none focus:outline-none focus:ring-0 resize-none placeholder:text-surface-300"
+      />
+      {!value.trim() && !editing && (
+        <p className="text-[11px] text-surface-400 mt-1">
+          Run Deep Research or ask the Console to draft this section
+        </p>
+      )}
+    </div>
   );
 }
 

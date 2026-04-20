@@ -34,7 +34,7 @@ export function ProposalPlanView() {
 
   const { status, result, clarificationQuestions, errorMessage } = store;
 
-  const isRunning = ["validating", "selecting_context", "drafting", "updating_agenda"].includes(status);
+  const isRunning = !["idle", "needs_clarification", "completed", "blocked", "failed", "interrupted"].includes(status);
 
   return (
     <TaskPageShell
@@ -50,6 +50,7 @@ export function ProposalPlanView() {
         />
       )}
       {isRunning && <PPLiveProgress />}
+      {status === "interrupted" && <PPInterruptedState />}
       {status === "completed" && result && (
         <ResultSummary
           result={result}
@@ -82,6 +83,54 @@ function PPLiveProgress() {
       sectionsProgress={sectionsProgress}
       sourcesSelected={sourcesSelected}
     />
+  );
+}
+
+/* ── Interrupted state ─────────────────────────────────────────────────── */
+
+function PPInterruptedState() {
+  const { currentStageMessage, sectionsProgress, input, reset } = useProposalPlanStore();
+  const completedSections = sectionsProgress.filter((s) => s.status === "done").length;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start gap-3 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200">
+        <RotateCcw className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-amber-800">Run was interrupted</p>
+          <p className="text-xs text-amber-600 mt-1">
+            The page was refreshed while generating. The stream cannot be resumed.
+          </p>
+        </div>
+      </div>
+
+      {(currentStageMessage || completedSections > 0) && (
+        <div className="px-4 py-3 rounded-lg bg-surface-50 border border-surface-200 space-y-2">
+          <p className="text-xs font-medium text-surface-600">Last known progress:</p>
+          {currentStageMessage && (
+            <p className="text-xs text-surface-500">Stage: {currentStageMessage}</p>
+          )}
+          {completedSections > 0 && (
+            <p className="text-xs text-surface-500">
+              {completedSections} of {sectionsProgress.length} sections drafted
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="flex items-center gap-2">
+        <button
+          onClick={reset}
+          className="btn-primary flex items-center gap-1.5 px-4 py-2 text-xs"
+        >
+          <RotateCcw className="w-3 h-3" />
+          Start Over
+        </button>
+        <p className="text-[11px] text-surface-400">
+          Topic: {input.topic || "—"}
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -217,7 +266,10 @@ function InputForm({ workspaceId }: { workspaceId: string }) {
             deliverable = allDeliverables.find((d) => d.id === input.targetDeliverableId) ?? null;
           }
           if (!deliverable) {
-            deliverable = deliverableStore.createDeliverable(workspaceId, delType, input.topic);
+            const title = res.generated_title || input.topic;
+            deliverable = deliverableStore.createDeliverable(workspaceId, delType, title);
+          } else if (res.generated_title) {
+            deliverableStore.renameDeliverable(workspaceId, deliverable.id, res.generated_title);
           }
 
           if (deliverable) {

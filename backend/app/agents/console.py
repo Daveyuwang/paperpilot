@@ -176,9 +176,17 @@ def _build_system_prompt(intent: str, ctx: dict) -> str:
         section_info = ""
         if ctx.get("focused_section_id"):
             section_info = f"\nThe user has a section focused (ID: {ctx['focused_section_id']})."
+        deliverable_info = ""
+        if ctx.get("deliverables"):
+            deliverable_info = "\n\nCurrent deliverables in workspace:"
+            for d in ctx["deliverables"]:
+                deliverable_info += f"\n- {d.get('title', 'Untitled')} ({d.get('type', '')})"
+                for s in d.get("sections", []):
+                    deliverable_info += f"\n  • {s.get('title', '')} [{s.get('status', 'empty')}]"
         return (
             f"{base}\n\n"
             "The user wants help with their research deliverable (e.g., literature review, proposal, report).{section_info}\n"
+            f"{deliverable_info}\n"
             "Help them by:\n"
             "1. Providing concrete writing suggestions or improvements\n"
             "2. Suggesting structure and organization\n"
@@ -214,11 +222,18 @@ def _build_system_prompt(intent: str, ctx: dict) -> str:
         )
 
     # workspace_question (default)
+    deliverable_info = ""
+    if ctx.get("deliverables"):
+        deliverable_info = "\n\nCurrent deliverables in workspace:"
+        for d in ctx["deliverables"]:
+            deliverable_info += f"\n- {d.get('title', 'Untitled')} ({d.get('type', '')})"
+            for s in d.get("sections", []):
+                deliverable_info += f"\n  • {s.get('title', '')} [{s.get('status', 'empty')}]"
     return (
         f"{base}\n\n"
         "Answer their research question concisely and helpfully. Focus on:\n"
         "- Actionable research guidance\n"
         "- Clear methodology explanations\n"
         "- Specific, well-structured answers\n"
-        "- Suggesting relevant next steps"
+        f"- Suggesting relevant next steps{deliverable_info}"
     )

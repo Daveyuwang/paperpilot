@@ -13,6 +13,7 @@ from qdrant_client.models import (
     Filter,
     FieldCondition,
     MatchValue,
+    MatchAny,
     FilterSelector,
 )
 
@@ -103,6 +104,44 @@ def dense_search(
             "section_title": hit.payload.get("section_title"),
             "page_number": hit.payload.get("page_number"),
             "bbox": hit.payload.get("bbox"),
+            "score": hit.score,
+            "source": "dense",
+        }
+        for hit in response.points
+    ]
+
+
+def dense_search_multi(
+    query_vector: list[float],
+    paper_ids: list[str],
+    top_k: int = 15,
+) -> list[dict]:
+    """Search Qdrant across multiple papers using MatchAny filter."""
+    if not paper_ids:
+        return []
+    ensure_collection()
+    client = get_client()
+
+    paper_filter = Filter(
+        must=[FieldCondition(key="paper_id", match=MatchAny(any=paper_ids))]
+    )
+
+    response = client.query_points(
+        collection_name=settings.qdrant_collection,
+        query=query_vector,
+        query_filter=paper_filter,
+        limit=top_k,
+        with_payload=True,
+    )
+
+    return [
+        {
+            "chunk_id": hit.payload["chunk_id"],
+            "content": hit.payload["content"],
+            "section_title": hit.payload.get("section_title"),
+            "page_number": hit.payload.get("page_number"),
+            "bbox": hit.payload.get("bbox"),
+            "paper_id": hit.payload.get("paper_id"),
             "score": hit.score,
             "source": "dense",
         }

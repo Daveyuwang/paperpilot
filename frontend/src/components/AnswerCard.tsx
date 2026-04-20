@@ -8,6 +8,7 @@ import {
   FileText,
 } from "lucide-react";
 import type { AnswerJSON, EvidenceItem } from "../types";
+import { MarkdownRenderer } from "./shared/MarkdownRenderer";
 
 // ── Inline markdown renderer ───────────────────────────────────────────────
 // Handles **bold**, *italic*, and `code` spans without any external library.
@@ -281,13 +282,12 @@ function PaperContextBlock({ text }: { text: string }) {
 // ── Plain language ────────────────────────────────────────────────────────
 
 function PlainLanguageBlock({ text }: { text: string }) {
-  const cleaned = cleanPassage(text);
-  if (!cleaned) return null;
+  if (!text?.trim()) return null;
   return (
     <div className="mb-4">
       <h4 className="text-[11px] uppercase tracking-widest text-surface-500 mb-2">In Plain Language</h4>
       <div className="rounded-lg bg-surface-50 border border-surface-200 px-3 py-2.5">
-        <p className="text-sm text-surface-600 leading-relaxed">{cleaned}</p>
+        <MarkdownRenderer content={text} />
       </div>
     </div>
   );
@@ -296,12 +296,11 @@ function PlainLanguageBlock({ text }: { text: string }) {
 // ── Bigger picture ────────────────────────────────────────────────────────
 
 function BiggerPictureBlock({ text }: { text: string }) {
-  const cleaned = cleanPassage(text);
-  if (!cleaned) return null;
+  if (!text?.trim()) return null;
   return (
     <div className="mb-4">
       <h4 className="text-[11px] uppercase tracking-widest text-surface-500 mb-2">Bigger Picture</h4>
-      <p className="text-sm text-surface-500 leading-relaxed">{cleaned}</p>
+      <MarkdownRenderer content={text} className="text-surface-500" />
     </div>
   );
 }
@@ -444,9 +443,7 @@ export default function AnswerCard({
           {/* Direct answer (no cursor) */}
           {directAnswer && (
             <div className="mb-4">
-              <p className="text-[15px] leading-relaxed text-surface-700 font-medium">
-                {renderInlineMd(directAnswer)}
-              </p>
+              <MarkdownRenderer content={directAnswer} className="text-[15px] font-medium" />
             </div>
           )}
 

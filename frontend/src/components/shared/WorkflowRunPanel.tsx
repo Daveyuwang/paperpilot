@@ -36,9 +36,22 @@ export function WorkflowRunPanel({
   const completedStages = stages.filter((_, i) => i < currentIdx);
   const currentStage = currentIdx >= 0 ? stages[currentIdx] : null;
   const pendingStages = stages.filter((_, i) => i > currentIdx);
+  const progressPct = stages.length > 0 ? Math.round(((currentIdx + 1) / stages.length) * 100) : 0;
 
   return (
     <div className="space-y-3">
+      {/* Progress bar */}
+      {currentIdx >= 0 && (
+        <div className="flex items-center gap-2">
+          <div className="flex-1 h-1.5 bg-surface-200 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-accent-500 rounded-full transition-all duration-700 ease-out"
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+          <span className="text-[11px] text-surface-400 tabular-nums">{progressPct}%</span>
+        </div>
+      )}
       {/* Completed stages — collapsed by default */}
       {completedStages.length > 0 && (
         <button

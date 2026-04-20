@@ -1,19 +1,24 @@
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
 import type { ClarificationQuestion, DeepResearchRunResult } from "@/types";
 
 export type DeepResearchStatus =
   | "idle"
   | "validating"
   | "needs_clarification"
-  | "preparing_queries"
-  | "discovering_sources"
-  | "selecting_sources"
-  | "generating_outline"
-  | "drafting"
-  | "updating_agenda"
+  | "planning"
+  | "executing"
+  | "evaluating"
+  | "replanning"
+  | "synthesizing"
+  | "interrupted"
   | "completed"
   | "blocked"
   | "failed";
+
+const RUNNING_STATUSES: DeepResearchStatus[] = [
+  "validating", "planning", "executing", "evaluating", "replanning", "synthesizing",
+];
 
 export interface DeepResearchInput {
   topic: string;
@@ -80,79 +85,93 @@ interface DeepResearchState {
   reset: () => void;
 }
 
-export const useDeepResearchStore = create<DeepResearchState>()((set) => ({
-  status: "idle",
-  input: { ...DEFAULT_INPUT },
-  result: null,
-  clarificationQuestions: [],
-  errorMessage: null,
-  createdDeliverableId: null,
-  currentStageMessage: null,
-  sectionsProgress: [],
-  sourcesFound: 0,
-  sourcesSelected: 0,
-  generatedTitle: null,
+export const useDeepResearchStore = create<DeepResearchState>()(
+  persist(
+    (set) => ({
+      status: "idle",
+      input: { ...DEFAULT_INPUT },
+      result: null,
+      clarificationQuestions: [],
+      errorMessage: null,
+      createdDeliverableId: null,
+      currentStageMessage: null,
+      sectionsProgress: [],
+      sourcesFound: 0,
+      sourcesSelected: 0,
+      generatedTitle: null,
 
-  setInput: (partial) => set((s) => ({ input: { ...s.input, ...partial } })),
+      setInput: (partial) => set((s) => ({ input: { ...s.input, ...partial } })),
 
-  startRun: () => set({
-    status: "validating",
-    result: null,
-    clarificationQuestions: [],
-    errorMessage: null,
-    createdDeliverableId: null,
-    currentStageMessage: null,
-    sectionsProgress: [],
-    sourcesFound: 0,
-    sourcesSelected: 0,
-    generatedTitle: null,
-  }),
+      startRun: () => set({
+        status: "validating",
+        result: null,
+        clarificationQuestions: [],
+        errorMessage: null,
+        createdDeliverableId: null,
+        currentStageMessage: null,
+        sectionsProgress: [],
+        sourcesFound: 0,
+        sourcesSelected: 0,
+        generatedTitle: null,
+      }),
 
-  setStatus: (status) => set({ status }),
+      setStatus: (status) => set({ status }),
 
-  setResult: (result) => set({ status: "completed", result }),
+      setResult: (result) => set({ status: "completed", result }),
 
-  setClarification: (questions) => set({
-    status: "needs_clarification",
-    clarificationQuestions: questions,
-  }),
+      setClarification: (questions) => set({
+        status: "needs_clarification",
+        clarificationQuestions: questions,
+      }),
 
-  setFailed: (message) => set({ status: "failed", errorMessage: message }),
+      setFailed: (message) => set({ status: "failed", errorMessage: message }),
 
-  setBlocked: (message) => set({ status: "blocked", errorMessage: message }),
+      setBlocked: (message) => set({ status: "blocked", errorMessage: message }),
 
-  setCreatedDeliverableId: (id) => set({ createdDeliverableId: id }),
+      setCreatedDeliverableId: (id) => set({ createdDeliverableId: id }),
 
-  // Streaming actions
-  setStageMessage: (message) => set({ currentStageMessage: message }),
+      setStageMessage: (message) => set({ currentStageMessage: message }),
 
-  initSectionsProgress: (titles) => set({
-    sectionsProgress: titles.map((title) => ({ title, status: "pending" as const })),
-  }),
+      initSectionsProgress: (titles) => set({
+        sectionsProgress: titles.map((title) => ({ title, status: "pending" as const })),
+      }),
 
-  setSectionStatus: (index, status, preview) => set((s) => ({
-    sectionsProgress: s.sectionsProgress.map((sec, i) =>
-      i === index ? { ...sec, status, ...(preview !== undefined ? { preview } : {}) } : sec
-    ),
-  })),
+      setSectionStatus: (index, status, preview) => set((s) => ({
+        sectionsProgress: s.sectionsProgress.map((sec, i) =>
+          i === index ? { ...sec, status, ...(preview !== undefined ? { preview } : {}) } : sec
+        ),
+      })),
 
-  setSourcesFound: (count) => set({ sourcesFound: count }),
+      setSourcesFound: (count) => set({ sourcesFound: count }),
 
-  setSourcesSelected: (count) => set({ sourcesSelected: count }),
+      setSourcesSelected: (count) => set({ sourcesSelected: count }),
 
-  setGeneratedTitle: (title) => set({ generatedTitle: title }),
+      setGeneratedTitle: (title) => set({ generatedTitle: title }),
 
-  reset: () => set({
-    status: "idle",
-    input: { ...DEFAULT_INPUT },
-    result: null,
-    clarificationQuestions: [],
-    errorMessage: null,
-    createdDeliverableId: null,
-    currentStageMessage: null,
-    sectionsProgress: [],
-    sourcesFound: 0,
-    sourcesSelected: 0,
-    generatedTitle: null,
-  }),
-}));
+      reset: () => set({
+        status: "idle",
+        input: { ...DEFAULT_INPUT },
+        result: null,
+        clarificationQuestions: [],
+        errorMessage: null,
+        createdDeliverableId: null,
+        currentStageMessage: null,
+        sectionsProgress: [],
+        sourcesFound: 0,
+        sourcesSelected: 0,
+        generatedTitle: null,
+      }),
+    }),
+    {
+      name: "pp_deep_research",
+      storage: createJSONStorage(() => localStorage),
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        if (RUNNING_STATUSES.includes(state.status)) {
+          state.status = "interrupted";
+          state.errorMessage = "Research was interrupted (page was refreshed or closed).";
+        }
+      },
+    }
+  )
+);

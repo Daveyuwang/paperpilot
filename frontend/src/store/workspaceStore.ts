@@ -14,11 +14,15 @@ export interface Workspace {
   activeViewerTab: ViewerTab;
 }
 
+export type ConsolePanelTab = "deliverable" | "sources";
+
 interface WorkspaceStore {
   workspaces: Record<string, Workspace>;
   activeWorkspaceId: string | null;
   appView: "home" | "shell";
   selectedNav: NavItem;
+  consolePanelOpen: boolean;
+  consolePanelTab: ConsolePanelTab;
 
   createWorkspace: (title: string, objective?: string) => Workspace;
   deleteWorkspace: (id: string) => void;
@@ -31,6 +35,8 @@ interface WorkspaceStore {
   setActiveViewerTab: (tab: ViewerTab) => void;
   setActivePaperId: (id: string | null) => void;
   setSelectedNav: (item: NavItem) => void;
+  setConsolePanelOpen: (open: boolean) => void;
+  setConsolePanelTab: (tab: ConsolePanelTab) => void;
 }
 
 const VALID_VIEWER_TABS: ViewerTab[] = ["reader", "deliverable", "sources", "agenda", "concepts"];
@@ -47,6 +53,8 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
       activeWorkspaceId: null,
       appView: "home",
       selectedNav: "workspace",
+      consolePanelOpen: true,
+      consolePanelTab: "deliverable",
 
       createWorkspace: (title, objective) => {
         const id = wsId();
@@ -123,6 +131,8 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
         }),
 
       setSelectedNav: (item) => set({ selectedNav: item }),
+      setConsolePanelOpen: (open) => set({ consolePanelOpen: open }),
+      setConsolePanelTab: (tab) => set({ consolePanelTab: tab }),
     }),
     {
       name: "pp_workspace",

@@ -10,14 +10,17 @@
     "lint": "eslint src --ext ts,tsx"
   },
   "dependencies": {
+    "clsx": "^2.1.1",
     "cytoscape": "^3.29.0",
     "cytoscape-cola": "^2.5.1",
+    "lucide-react": "^0.396.0",
     "pdfjs-dist": "^4.3.136",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "zustand": "^4.5.2",
-    "clsx": "^2.1.1",
-    "lucide-react": "^0.396.0"
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "zustand": "^4.5.2"
   },
   "devDependencies": {
     "@types/cytoscape": "^3.21.4",
