@@ -53,7 +53,8 @@ export interface GuideQuestion {
 export interface Session {
   id: string;
   guest_id: string | null;
-  paper_id: string;
+  paper_id: string | null;
+  workspace_id: string | null;
   created_at: string;
   last_active: string;
 }
@@ -105,6 +106,67 @@ export interface ConceptMap {
   nodes: ConceptNode[];
   edges: ConceptEdge[];
   generated: boolean;
+}
+
+// ── Deliverables ──────────────────────────────────────────────────────────
+
+export type DeliverableType = "deep_research" | "proposal" | "research_plan" | "notes";
+
+export interface DeliverableSection {
+  id: string;
+  title: string;
+  content: string;
+  order: number;
+  linkedSourceIds: string[];
+  createdAt: number;
+  updatedAt: number;
+  lastUpdatedBy?: "user" | "ai";
+  lastAIMode?: "draft" | "revise";
+  lastSourceIdsUsed?: string[];
+}
+
+export interface Deliverable {
+  id: string;
+  workspaceId: string;
+  type: DeliverableType;
+  title: string;
+  sections: DeliverableSection[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+// ── Sources ───────────────────────────────────────────────────────────────
+
+export type SourceLabel = "core" | "background" | "general";
+
+export interface WorkspaceSource {
+  id: string;
+  title: string;
+  authors: string[];
+  year: number | null;
+  doi: string | null;
+  arxiv_id: string | null;
+  abstract: string | null;
+  url: string | null;
+  citation_count: number | null;
+  provider: "upload" | "openalex" | "arxiv";
+  paper_id: string | null;
+  label: SourceLabel;
+  added_at: string;
+  included: boolean;
+}
+
+export interface DiscoveredSource {
+  external_id: string;
+  provider: string;
+  title: string;
+  authors: string[];
+  year: number | null;
+  doi: string | null;
+  arxiv_id: string | null;
+  abstract: string | null;
+  url: string | null;
+  citation_count: number | null;
 }
 
 // ── Answer JSON ────────────────────────────────────────────────────────────
@@ -201,4 +263,81 @@ export interface ChatMessage {
   isDone?: boolean;          // true briefly after finalize, for Done animation
   isPartial?: boolean;       // user stopped generation mid-stream
   phase1Complete?: boolean;  // answerJson arrived; secondary blocks may reveal
+}
+
+// ── Deep Research ─────────────────────────────────────────────────────────
+
+export interface ClarificationQuestion {
+  field: string;
+  question: string;
+  suggestion: string | null;
+}
+
+export interface DeepResearchSectionUpdate {
+  section_index: number;
+  title: string;
+  mode: string;
+  generated_content: string;
+  source_ids_used: string[];
+  notes: string | null;
+}
+
+export interface DeepResearchFollowUp {
+  title: string;
+  description: string | null;
+  category: string | null;
+  priority: number;
+}
+
+export interface DeepResearchRunResult {
+  run_id: string;
+  status: string;
+  clarification_questions: ClarificationQuestion[];
+  generated_title: string | null;
+  generated_outline: string[] | null;
+  section_updates: DeepResearchSectionUpdate[];
+  discovered_sources: DiscoveredSource[];
+  saved_source_ids: string[];
+  selected_source_ids: string[];
+  unresolved_questions: string[];
+  follow_up_items: DeepResearchFollowUp[];
+  summary: string | null;
+  message: string | null;
+}
+
+// ── Proposal / Research Plan ─────────────────────────────────────────────
+
+export type ProposalPlanMode = "proposal" | "research_plan";
+
+export interface PPSectionUpdate {
+  section_id: string;
+  mode: string;
+  generated_content: string;
+  source_ids_used: string[];
+  notes: string | null;
+}
+
+export interface PPFollowUp {
+  title: string;
+  description: string | null;
+  category: string | null;
+  priority: number;
+}
+
+export interface ProposalPlanRunResult {
+  run_id: string;
+  mode: ProposalPlanMode;
+  status: string;
+  clarification_questions: ClarificationQuestion[];
+  generated_title: string | null;
+  generated_outline: string[] | null;
+  section_updates: PPSectionUpdate[];
+  updated_section_ids: string[];
+  skipped_section_ids: string[];
+  selected_source_ids: string[];
+  deep_research_context_ids: string[];
+  unresolved_questions: string[];
+  follow_up_items: PPFollowUp[];
+  summary: string | null;
+  message: string | null;
 }

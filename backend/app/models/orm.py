@@ -15,6 +15,19 @@ def new_uuid() -> str:
     return str(uuid.uuid4())
 
 
+class Workspace(Base):
+    __tablename__ = "workspaces"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    guest_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(512), default="My Research Workspace")
+    objective: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    papers: Mapped[list["Paper"]] = relationship(back_populates="workspace")
+
+
 class PaperStatus(str, enum.Enum):
     pending = "pending"
     processing = "processing"
@@ -27,6 +40,7 @@ class Paper(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     guest_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("workspaces.id", ondelete="SET NULL"), nullable=True, index=True)
     filename: Mapped[str] = mapped_column(String(512))
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     abstract: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -49,6 +63,7 @@ class Paper(Base):
     guide_questions: Mapped[list["GuideQuestion"]] = relationship(back_populates="paper", cascade="all, delete-orphan")
     concept_nodes: Mapped[list["ConceptNode"]] = relationship(back_populates="paper", cascade="all, delete-orphan")
     sessions: Mapped[list["Session"]] = relationship(back_populates="paper", cascade="all, delete-orphan")
+    workspace: Mapped["Workspace | None"] = relationship(back_populates="papers")
 
 
 class Chunk(Base):
@@ -127,11 +142,12 @@ class Session(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     guest_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    paper_id: Mapped[str] = mapped_column(String(36), ForeignKey("papers.id", ondelete="CASCADE"))
+    paper_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("papers.id", ondelete="CASCADE"), nullable=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("workspaces.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_active: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    paper: Mapped["Paper"] = relationship(back_populates="sessions")
+    paper: Mapped["Paper | None"] = relationship(back_populates="sessions")
 
 
 class PaperConceptMap(Base):

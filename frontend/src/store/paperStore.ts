@@ -5,42 +5,57 @@ import { api } from "@/api/client";
 // Track which paper IDs are already being polled to avoid duplicate intervals
 const _activePolls = new Set<string>();
 
-// ── localStorage helpers ──────────────────────────────────────────────────
+// ── localStorage helpers (workspace-scoped) ──────────────────────────────
 
-const ACTIVE_KEY = "pp_active";
-const SESSION_BY_PAPER_KEY = "pp_session_by_paper";
+function activeKey(wsId: string) { return `pp_active_${wsId}`; }
+function sessionMapKey(wsId: string) { return `pp_session_by_paper_${wsId}`; }
 
-function saveActive(paperId: string, sessionId: string) {
-  localStorage.setItem(ACTIVE_KEY, JSON.stringify({ paperId, sessionId }));
-  // Also update the session-by-paper map so switching back to this paper restores it
-  const map = getSessionByPaperMap();
+function saveActive(paperId: string, sessionId: string, wsId: string) {
+  localStorage.setItem(activeKey(wsId), JSON.stringify({ paperId, sessionId }));
+  const map = getSessionByPaperMap(wsId);
   map[paperId] = sessionId;
-  localStorage.setItem(SESSION_BY_PAPER_KEY, JSON.stringify(map));
+  localStorage.setItem(sessionMapKey(wsId), JSON.stringify(map));
 }
 
-function loadActive(): { paperId: string; sessionId: string } | null {
+function loadActive(wsId: string): { paperId: string; sessionId: string } | null {
   try {
-    const raw = localStorage.getItem(ACTIVE_KEY);
-    return raw ? JSON.parse(raw) : null;
+    const raw = localStorage.getItem(activeKey(wsId));
+    if (raw) return JSON.parse(raw);
+    // Migration: check old global key
+    const old = localStorage.getItem("pp_active");
+    if (old) {
+      localStorage.removeItem("pp_active");
+      localStorage.setItem(activeKey(wsId), old);
+      return JSON.parse(old);
+    }
+    return null;
   } catch { return null; }
 }
 
-function clearActive() {
-  localStorage.removeItem(ACTIVE_KEY);
+function clearActive(wsId: string) {
+  localStorage.removeItem(activeKey(wsId));
 }
 
-function getSessionByPaperMap(): Record<string, string> {
+function getSessionByPaperMap(wsId: string): Record<string, string> {
   try {
-    const raw = localStorage.getItem(SESSION_BY_PAPER_KEY);
-    return raw ? JSON.parse(raw) : {};
+    const raw = localStorage.getItem(sessionMapKey(wsId));
+    if (raw) return JSON.parse(raw);
+    // Migration: check old global key
+    const old = localStorage.getItem("pp_session_by_paper");
+    if (old) {
+      localStorage.removeItem("pp_session_by_paper");
+      localStorage.setItem(sessionMapKey(wsId), old);
+      return JSON.parse(old);
+    }
+    return {};
   } catch { return {}; }
 }
 
-function clearSessionForPaper(paperId: string) {
-  const map = getSessionByPaperMap();
+function clearSessionForPaper(paperId: string, wsId: string) {
+  const map = getSessionByPaperMap(wsId);
   if (map[paperId]) {
     delete map[paperId];
-    localStorage.setItem(SESSION_BY_PAPER_KEY, JSON.stringify(map));
+    localStorage.setItem(sessionMapKey(wsId), JSON.stringify(map));
   }
 }
 
@@ -54,24 +69,18 @@ interface PaperStore {
   chunks: Chunk[];
   isLoading: boolean;
   error: string | null;
+  currentWorkspaceId: string | null;
 
-  loadPapers: () => Promise<void>;
-  uploadPaper: (file: File) => Promise<Paper>;
-  /**
-   * Select a paper. Returns the covered question IDs from Redis session state.
-   * - If id === activePaper.id: no-op (returns current covered IDs without any state change).
-   * - If different paper: restores the paper's last session (or creates one if none exists),
-   *   then calls chatStore.switchToSession to load persisted messages for that session.
-   */
+  loadPapers: (workspaceId?: string) => Promise<void>;
+  uploadPaper: (file: File, workspaceId?: string) => Promise<Paper>;
   selectPaper: (id: string) => Promise<string[]>;
+  deselectPaper: () => Promise<void>;
   deletePaper: (id: string) => Promise<void>;
   pollPaperStatus: (id: string) => void;
-  /** Create a fresh session for the currently active paper (for "New chat"). */
   newSession: () => Promise<void>;
-  /** Full reset: delete all papers and clear local state. */
   endSession: () => Promise<void>;
-  // Restore active paper+session from localStorage on app startup
-  restoreActive: () => Promise<string[] | null>;
+  restoreActive: (workspaceId?: string) => Promise<string[] | null>;
+  resetForWorkspace: (workspaceId: string) => Promise<void>;
 }
 
 export const usePaperStore = create<PaperStore>((set, get) => ({
@@ -82,13 +91,13 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
   chunks: [],
   isLoading: false,
   error: null,
+  currentWorkspaceId: null,
 
-  loadPapers: async () => {
-    set({ isLoading: true, error: null });
+  loadPapers: async (workspaceId) => {
+    set({ isLoading: true, error: null, currentWorkspaceId: workspaceId ?? null });
     try {
-      const papers = await api.listPapers();
+      const papers = await api.listPapers(workspaceId);
       set({ papers, isLoading: false });
-      // Auto-poll any papers still being processed (survives page refresh)
       papers.forEach((p) => {
         if (p.status === "pending" || p.status === "processing") {
           get().pollPaperStatus(p.id);
@@ -99,11 +108,11 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
     }
   },
 
-  uploadPaper: async (file) => {
+  uploadPaper: async (file, workspaceId) => {
     set({ isLoading: true, error: null });
     try {
-      const paper = await api.uploadPaper(file);
-      const papers = await api.listPapers();
+      const paper = await api.uploadPaper(file, workspaceId);
+      const papers = await api.listPapers(workspaceId);
       set({ papers, isLoading: false });
       get().pollPaperStatus(paper.id);
       return paper;
@@ -113,10 +122,33 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
     }
   },
 
-  selectPaper: async (id) => {
-    const { activePaper, activeSession } = get();
+  deselectPaper: async () => {
+    const { currentWorkspaceId } = get();
+    if (currentWorkspaceId) clearActive(currentWorkspaceId);
+    set({ activePaper: null, activeSession: null, questions: [], chunks: [] });
 
-    // Clicking the currently active paper is a no-op — no new chat, no reset
+    const { useChatStore } = await import("@/store/chatStore");
+    const { useWorkspaceStore } = await import("@/store/workspaceStore");
+    const ws = useWorkspaceStore.getState().getActiveWorkspace();
+    if (ws) {
+      const consoleSessionId = useChatStore.getState().getConsoleSessionId(ws.id);
+      if (consoleSessionId) {
+        useChatStore.getState().switchToSession(consoleSessionId, []);
+      } else {
+        useChatStore.getState().clearChat();
+      }
+    } else {
+      useChatStore.getState().clearChat();
+    }
+
+    const { useAgendaStore } = await import("@/store/agendaStore");
+    useAgendaStore.getState().clearVolatile();
+  },
+
+  selectPaper: async (id) => {
+    const { activePaper, activeSession, currentWorkspaceId } = get();
+    const wsId = currentWorkspaceId ?? "default";
+
     if (activePaper?.id === id) {
       const sessionState = await api
         .getSessionState(activeSession?.id ?? "")
@@ -126,8 +158,7 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
 
     set({ isLoading: true, error: null });
     try {
-      // Look up the last session for this paper (if any)
-      const sessionMap = getSessionByPaperMap();
+      const sessionMap = getSessionByPaperMap(wsId);
       const lastSessionId = sessionMap[id];
 
       let session: Session;
@@ -135,11 +166,9 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
         try {
           session = await api.getSession(lastSessionId);
         } catch {
-          // Session expired — create a fresh one
           session = await api.createSession(id);
         }
       } else {
-        // First time selecting this paper — create a session
         session = await api.createSession(id);
       }
 
@@ -150,11 +179,9 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
         api.getSessionState(session.id).catch(() => ({})),
       ]);
 
-      saveActive(id, session.id); // also updates pp_session_by_paper
-
+      saveActive(id, session.id, wsId);
       const coveredIds = (sessionState as any).covered_question_ids ?? [];
 
-      // Switch session in chatStore: saves current session's messages, loads new session's
       const { useChatStore } = await import("@/store/chatStore");
       useChatStore.getState().switchToSession(session.id, coveredIds);
 
@@ -171,8 +198,8 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
   deletePaper: async (id) => {
     const prev = get();
     const isActive = prev.activePaper?.id === id;
+    const wsId = prev.currentWorkspaceId ?? "default";
 
-    // Optimistic: immediately remove from list and clear active state
     set({
       papers: prev.papers.filter((p) => p.id !== id),
       ...(isActive
@@ -180,7 +207,7 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
         : {}),
     });
     if (isActive) {
-      clearActive();
+      clearActive(wsId);
       const sessionId = prev.activeSession?.id;
       const { useChatStore } = await import("@/store/chatStore");
       if (sessionId) {
@@ -193,9 +220,8 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
     try {
       await api.deletePaper(id);
     } catch (e) {
-      // Rollback on failure: re-fetch from server
       console.debug("[PaperPilot] delete_fail", { paperId: id, error: String(e) });
-      const papers = await api.listPapers().catch(() => prev.papers);
+      const papers = await api.listPapers(prev.currentWorkspaceId ?? undefined).catch(() => prev.papers);
       set({ papers });
     }
   },
@@ -224,13 +250,13 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
   },
 
   newSession: async () => {
-    const { activePaper } = get();
+    const { activePaper, currentWorkspaceId } = get();
     if (!activePaper) return;
+    const wsId = currentWorkspaceId ?? "default";
     try {
       const session = await api.createSession(activePaper.id);
-      saveActive(activePaper.id, session.id); // also updates pp_session_by_paper
+      saveActive(activePaper.id, session.id, wsId);
 
-      // Switch to new (empty) session — saves current messages, starts fresh
       const { useChatStore } = await import("@/store/chatStore");
       useChatStore.getState().switchToSession(session.id, []);
 
@@ -242,52 +268,50 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
 
   endSession: async () => {
     const prev = get();
+    const wsId = prev.currentWorkspaceId ?? "default";
     try {
-      const papers = await api.listPapers().catch(() => prev.papers);
+      const papers = await api.listPapers(prev.currentWorkspaceId ?? undefined).catch(() => prev.papers);
       for (const p of papers) {
         try {
           await api.deletePaper(p.id);
         } catch {}
       }
     } finally {
-      clearActive();
-      for (const p of prev.papers) clearSessionForPaper(p.id);
+      clearActive(wsId);
+      for (const p of prev.papers) clearSessionForPaper(p.id, wsId);
       const { useChatStore } = await import("@/store/chatStore");
-      // Clear persisted chat storage too.
       try { localStorage.removeItem("paperpilot-chat"); } catch {}
       useChatStore.getState().clearChat();
       set({ papers: [], activePaper: null, activeSession: null, questions: [], chunks: [] });
     }
   },
 
-  restoreActive: async () => {
-    const stored = loadActive();
+  restoreActive: async (workspaceId) => {
+    const wsId = workspaceId ?? get().currentWorkspaceId ?? "default";
+    const stored = loadActive(wsId);
     if (!stored) return null;
 
-    // Paper: if definitely gone (404), clear stored ref. On network error, leave it.
     let paper: Paper;
     try {
       paper = await api.getPaper(stored.paperId);
     } catch (e: any) {
-      if (String(e?.message ?? "").includes("404")) clearActive();
-      return null; // network error: keep pp_active ref, retry next time
+      if (String(e?.message ?? "").includes("404")) clearActive(wsId);
+      return null;
     }
-    if (paper.status !== "ready") return null; // still processing, keep ref
+    if (paper.status !== "ready") return null;
 
-    // Session: create fresh one if expired; don't bail if creation also fails
     let session: Session;
     try {
       session = await api.getSession(stored.sessionId);
     } catch {
       try {
         session = await api.createSession(stored.paperId);
-        saveActive(stored.paperId, session.id);
+        saveActive(stored.paperId, session.id, wsId);
       } catch {
         return null;
       }
     }
 
-    // Secondary data: questions/chunks failure is non-fatal — still restore active paper
     try {
       const [questions, chunks, sessionState] = await Promise.all([
         api.getQuestions(stored.paperId),
@@ -296,8 +320,6 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
       ]);
 
       const coveredIds = (sessionState as any).covered_question_ids ?? [];
-
-      // Switch session in chatStore to restore this session's persisted messages
       const { useChatStore } = await import("@/store/chatStore");
       useChatStore.getState().switchToSession(session.id, coveredIds);
 
@@ -309,5 +331,15 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
       set({ activePaper: paper, activeSession: session, questions: [], chunks: [] });
       return [];
     }
+  },
+
+  resetForWorkspace: async (workspaceId) => {
+    set({ activePaper: null, activeSession: null, questions: [], chunks: [], papers: [] });
+    const { useChatStore } = await import("@/store/chatStore");
+    useChatStore.getState().clearChat();
+    const { useAgendaStore } = await import("@/store/agendaStore");
+    useAgendaStore.getState().clearVolatile();
+    await get().loadPapers(workspaceId);
+    await get().restoreActive(workspaceId);
   },
 }));

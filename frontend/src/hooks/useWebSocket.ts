@@ -9,6 +9,7 @@ type OutboundMessage = {
   question: string;
   question_id: string | null;
   mode_override: string | null;
+  context?: Record<string, unknown>;
 };
 
 export function useWebSocket(sessionId: string | null, onMessage: MessageHandler) {
@@ -59,11 +60,12 @@ export function useWebSocket(sessionId: string | null, onMessage: MessageHandler
   }, [sessionId, reconnectTick]);
 
   const sendMessage = useCallback(
-    (question: string, questionId?: string, modeOverride?: string) => {
+    (question: string, questionId?: string, modeOverride?: string, context?: Record<string, unknown>) => {
       const payload: OutboundMessage = {
         question,
         question_id: questionId ?? null,
         mode_override: modeOverride ?? null,
+        ...(context ? { context } : {}),
       };
 
       if (wsRef.current?.readyState === WebSocket.OPEN) {

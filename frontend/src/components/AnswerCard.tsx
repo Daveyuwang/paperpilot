@@ -22,7 +22,7 @@ function renderInlineMd(text: string): React.ReactNode {
       {parts.map((part, i) => {
         if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
           return (
-            <strong key={i} className="font-semibold text-white">
+            <strong key={i} className="font-semibold text-surface-800">
               {part.slice(2, -2)}
             </strong>
           );
@@ -34,7 +34,7 @@ function renderInlineMd(text: string): React.ReactNode {
           return (
             <code
               key={i}
-              className="px-1 py-0.5 rounded bg-white/10 text-blue-200 text-[0.9em] font-mono"
+              className="px-1 py-0.5 rounded bg-surface-200 text-accent-700 text-[0.9em] font-mono"
             >
               {part.slice(1, -1)}
             </code>
@@ -89,7 +89,7 @@ function SkeletonBlock({ lines = 2, className = "" }: { lines?: number; classNam
       {Array.from({ length: lines }).map((_, i) => (
         <div
           key={i}
-          className="h-3 rounded bg-white/[0.06] animate-pulse"
+          className="h-3 rounded bg-surface-200 animate-pulse"
           style={{ width: i === lines - 1 ? "70%" : "100%" }}
         />
       ))}
@@ -109,10 +109,10 @@ interface ScopeBadgeProps {
 function ScopeBadge({ label, mode, canExpand, onOverride }: ScopeBadgeProps) {
   const badgeStyle =
     mode === "concept_explanation"
-      ? "bg-teal-500/15 text-teal-300 border-teal-500/25"
+      ? "bg-teal-50 text-teal-700 border-teal-200"
       : mode === "external_expansion" || mode === "expansion"
-      ? "bg-amber-500/15 text-amber-300 border-amber-500/25"
-      : "bg-blue-500/15 text-blue-300 border-blue-500/25";
+      ? "bg-amber-50 text-amber-700 border-amber-200"
+      : "bg-blue-50 text-blue-700 border-blue-200";
 
   const Icon =
     mode === "concept_explanation" ? Lightbulb
@@ -139,7 +139,7 @@ function ScopeBadge({ label, mode, canExpand, onOverride }: ScopeBadgeProps) {
         <button
           key={a.type}
           onClick={() => onOverride?.(a.type)}
-          className="text-xs text-gray-500 hover:text-gray-300 transition-colors underline underline-offset-2"
+          className="text-xs text-surface-500 hover:text-surface-700 transition-colors underline underline-offset-2"
         >
           {a.label}
         </button>
@@ -153,9 +153,9 @@ function ScopeBadge({ label, mode, canExpand, onOverride }: ScopeBadgeProps) {
 function StreamingDirectAnswer({ text }: { text: string }) {
   return (
     <div className="mb-4">
-      <p className="text-[15px] leading-relaxed text-gray-100 font-medium">
+      <p className="text-[15px] leading-relaxed text-surface-700 font-medium">
         {renderInlineMd(text)}
-        <span className="inline-block w-0.5 h-[1.1em] bg-blue-400 align-text-bottom ml-0.5 animate-pulse" />
+        <span className="inline-block w-0.5 h-[1.1em] bg-accent-500 align-text-bottom ml-0.5 animate-pulse" />
       </p>
     </div>
   );
@@ -168,14 +168,14 @@ function Phase1Skeletons() {
     <div className="space-y-4 mt-4">
       {/* Evidence skeleton */}
       <div>
-        <div className="h-2.5 w-20 rounded bg-white/[0.06] animate-pulse mb-2" />
-        <div className="rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2.5">
+        <div className="h-2.5 w-20 rounded bg-surface-200 animate-pulse mb-2" />
+        <div className="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2.5">
           <SkeletonBlock lines={3} />
         </div>
       </div>
       {/* Plain language skeleton */}
       <div>
-        <div className="h-2.5 w-28 rounded bg-white/[0.06] animate-pulse mb-2" />
+        <div className="h-2.5 w-28 rounded bg-surface-200 animate-pulse mb-2" />
         <SkeletonBlock lines={2} />
       </div>
     </div>
@@ -223,34 +223,34 @@ function EvidenceBlock({
 
   return (
     <div className="mb-4">
-      <h4 className="text-[11px] uppercase tracking-widest text-gray-500 mb-2">Key Evidence</h4>
+      <h4 className="text-[11px] uppercase tracking-widest text-surface-500 mb-2">Key Evidence</h4>
       <div className="space-y-2">
         {valid.map((item, i) => {
           const passage = cleanPassage(item.passage);
           const section = cleanSection(item.section);
           const isExplicit = item.type === "explicit";
           return (
-            <div key={i} className="rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2.5">
-              <p className="text-sm text-gray-200 leading-snug italic mb-1.5">
+            <div key={i} className="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2.5">
+              <p className="text-sm text-surface-600 leading-snug italic mb-1.5">
                 &ldquo;{passage}&rdquo;
               </p>
               <div className="flex items-center gap-1.5 flex-wrap">
                 {item.page && (
                   <button
                     onClick={() => onCitationClick?.(item.page, item.section)}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-blue-500/15 text-blue-300 border border-blue-500/20 hover:bg-blue-500/25 transition-colors"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition-colors"
                   >
                     <FileText className="w-2.5 h-2.5" />
                     p.{item.page}
                   </button>
                 )}
                 {section && (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] bg-white/5 text-gray-400 border border-white/8">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] bg-surface-100 text-surface-500 border border-surface-200">
                     §{section}
                   </span>
                 )}
                 <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] ${
-                  isExplicit ? "bg-emerald-500/10 text-emerald-400" : "bg-purple-500/10 text-purple-400"
+                  isExplicit ? "bg-emerald-50 text-emerald-700" : "bg-purple-50 text-purple-700"
                 }`}>
                   {isExplicit ? "explicit" : "inferred"}
                 </span>
@@ -270,9 +270,9 @@ function PaperContextBlock({ text }: { text: string }) {
   if (!cleaned) return null;
   return (
     <div className="mb-4">
-      <h4 className="text-[11px] uppercase tracking-widest text-gray-500 mb-2">In This Paper</h4>
-      <div className="rounded-lg bg-teal-500/8 border border-teal-500/15 px-3 py-2.5">
-        <p className="text-sm text-teal-200/90 leading-relaxed">{cleaned}</p>
+      <h4 className="text-[11px] uppercase tracking-widest text-surface-500 mb-2">In This Paper</h4>
+      <div className="rounded-lg bg-teal-50 border border-teal-200 px-3 py-2.5">
+        <p className="text-sm text-teal-800 leading-relaxed">{cleaned}</p>
       </div>
     </div>
   );
@@ -285,9 +285,9 @@ function PlainLanguageBlock({ text }: { text: string }) {
   if (!cleaned) return null;
   return (
     <div className="mb-4">
-      <h4 className="text-[11px] uppercase tracking-widest text-gray-500 mb-2">In Plain Language</h4>
-      <div className="rounded-lg bg-white/[0.04] border border-white/8 px-3 py-2.5">
-        <p className="text-sm text-gray-300 leading-relaxed">{cleaned}</p>
+      <h4 className="text-[11px] uppercase tracking-widest text-surface-500 mb-2">In Plain Language</h4>
+      <div className="rounded-lg bg-surface-50 border border-surface-200 px-3 py-2.5">
+        <p className="text-sm text-surface-600 leading-relaxed">{cleaned}</p>
       </div>
     </div>
   );
@@ -300,8 +300,8 @@ function BiggerPictureBlock({ text }: { text: string }) {
   if (!cleaned) return null;
   return (
     <div className="mb-4">
-      <h4 className="text-[11px] uppercase tracking-widest text-gray-500 mb-2">Bigger Picture</h4>
-      <p className="text-sm text-gray-400 leading-relaxed">{cleaned}</p>
+      <h4 className="text-[11px] uppercase tracking-widest text-surface-500 mb-2">Bigger Picture</h4>
+      <p className="text-sm text-surface-500 leading-relaxed">{cleaned}</p>
     </div>
   );
 }
@@ -312,7 +312,7 @@ function UncertaintyBlock({ text }: { text: string }) {
   const cleaned = cleanPassage(text);
   if (!cleaned) return null;
   return (
-    <div className="mb-4 flex items-start gap-2 text-amber-300/80">
+    <div className="mb-4 flex items-start gap-2 text-amber-600">
       <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
       <p className="text-sm leading-relaxed">{cleaned}</p>
     </div>
@@ -328,12 +328,49 @@ function KeyPointsBlock({ points }: { points: string[] }) {
     <div className="mb-4">
       <ul className="space-y-1.5">
         {valid.map((pt, i) => (
-          <li key={i} className="flex items-start gap-2 text-sm text-gray-200">
-            <ChevronRight className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-blue-400" />
+          <li key={i} className="flex items-start gap-2 text-sm text-surface-700">
+            <ChevronRight className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-accent-500" />
             <span className="leading-snug">{renderInlineMd(pt)}</span>
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+// ── Expansion failure card ────────────────────────────────────────────────
+
+function ExpansionFailureCard({ mode }: { mode: string }) {
+  const isExpansion = mode === "external_expansion" || mode === "expansion";
+  const title = isExpansion
+    ? "Couldn't find enough usable external support"
+    : "No answer could be generated";
+
+  const suggestions = isExpansion
+    ? [
+        { label: "Try a broader question", hint: "Widen the scope or simplify the query" },
+        { label: "Search sources first", hint: "Use Deep Research or Sources to gather material" },
+        { label: "Ask something more specific", hint: "Narrow down to a concrete sub-question" },
+      ]
+    : [
+        { label: "Rephrase the question", hint: "Try different wording or more context" },
+        { label: "Ask about a specific section", hint: "Focus on a particular part of the paper" },
+      ];
+
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+      <div className="flex items-center gap-2 mb-2">
+        <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+        <span className="text-sm font-medium text-amber-800">{title}</span>
+      </div>
+      <div className="space-y-1.5 ml-6">
+        {suggestions.map((s, i) => (
+          <div key={i} className="text-xs">
+            <span className="text-amber-700 font-medium">{s.label}</span>
+            <span className="text-amber-600 ml-1">— {s.hint}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -368,10 +405,18 @@ export default function AnswerCard({
 
   // Phase 1: streaming tokens present, full JSON not yet decoded into blocks
   const isPhase1 = Boolean(streamingText && !phase1Complete);
-  // Phase 2: answerJson arrived, secondary blocks can reveal
-  const isPhase2 = Boolean(phase1Complete && answer.direct_answer);
+  // Phase 2: answerJson arrived — secondary blocks can reveal
+  const isPhase2 = Boolean(phase1Complete);
 
   const directAnswer = answer.direct_answer || streamingText || "";
+  const hasAnyContent = Boolean(
+    directAnswer ||
+    (answer.key_points && answer.key_points.length > 0) ||
+    (answer.evidence && answer.evidence.length > 0) ||
+    answer.plain_language ||
+    answer.bigger_picture ||
+    answer.uncertainty
+  );
 
   return (
     <div className="text-sm w-full">
@@ -397,11 +442,13 @@ export default function AnswerCard({
       {(isPhase2 || (!isPhase1 && directAnswer)) && (
         <>
           {/* Direct answer (no cursor) */}
-          <div className="mb-4">
-            <p className="text-[15px] leading-relaxed text-gray-100 font-medium">
-              {renderInlineMd(directAnswer)}
-            </p>
-          </div>
+          {directAnswer && (
+            <div className="mb-4">
+              <p className="text-[15px] leading-relaxed text-surface-700 font-medium">
+                {renderInlineMd(directAnswer)}
+              </p>
+            </div>
+          )}
 
           {/* Key points */}
           {answer.key_points && answer.key_points.length > 0 && (
@@ -445,6 +492,11 @@ export default function AnswerCard({
             </FadeInBlock>
           )}
         </>
+      )}
+
+      {/* Fallback: phase complete but no renderable content at all */}
+      {isPhase2 && !isPhase1 && !hasAnyContent && (
+        <ExpansionFailureCard mode={mode} />
       )}
     </div>
   );

@@ -3,10 +3,10 @@ import { ChevronRight, BookOpen } from "lucide-react";
 import type { Paper, GuideQuestion } from "@/types";
 
 const STAGE_COLOR: Record<string, string> = {
-  motivation:  "text-rose-400   border-rose-500/30   bg-rose-500/5",
-  approach:    "text-amber-400  border-amber-500/30  bg-amber-500/5",
-  experiments: "text-emerald-400 border-emerald-500/30 bg-emerald-500/5",
-  takeaways:   "text-accent-400 border-accent-500/30 bg-accent-500/5",
+  motivation:  "text-rose-700   border-rose-200   bg-rose-50",
+  approach:    "text-amber-700  border-amber-200  bg-amber-50",
+  experiments: "text-emerald-700 border-emerald-200 bg-emerald-50",
+  takeaways:   "text-accent-700 border-accent-200 bg-accent-50",
 };
 
 interface Props {
@@ -35,15 +35,15 @@ export function WelcomePanel({ paper, questions, onAsk }: Props) {
     <div className="flex flex-col h-full overflow-y-auto p-5 space-y-5">
       {/* Paper header */}
       <div className="flex items-start gap-3">
-        <div className="w-9 h-9 rounded-lg bg-accent-600/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-          <BookOpen className="w-4.5 h-4.5 text-accent-400" />
+        <div className="w-9 h-9 rounded-lg bg-accent-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+          <BookOpen className="w-4.5 h-4.5 text-accent-600" />
         </div>
         <div>
-          <h2 className="text-base font-semibold text-gray-100 leading-snug">
+          <h2 className="text-base font-semibold text-surface-800 leading-snug">
             {paper.title ?? paper.filename}
           </h2>
           {abstractPreview && (
-            <p className="text-xs text-gray-400 mt-1.5 leading-relaxed line-clamp-3">
+            <p className="text-xs text-surface-500 mt-1.5 leading-relaxed line-clamp-3">
               {abstractPreview}
             </p>
           )}
@@ -52,7 +52,7 @@ export function WelcomePanel({ paper, questions, onAsk }: Props) {
 
       {/* Divider + prompt */}
       <div>
-        <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-surface-500 mb-3">
           Start with a guided question
         </p>
         <div className="space-y-2">
@@ -72,7 +72,7 @@ export function WelcomePanel({ paper, questions, onAsk }: Props) {
                   <span className="text-[10px] font-semibold uppercase tracking-wider opacity-70 block mb-0.5">
                     {q.stage}
                   </span>
-                  <span className="text-sm text-gray-200 leading-snug">{q.question}</span>
+                  <span className="text-sm text-surface-700 leading-snug">{q.question}</span>
                 </div>
                 <ChevronRight className="w-4 h-4 flex-shrink-0 mt-0.5 opacity-50" />
               </button>
@@ -82,7 +82,7 @@ export function WelcomePanel({ paper, questions, onAsk }: Props) {
       </div>
 
       {/* Free-form nudge */}
-      <p className="text-xs text-gray-600 text-center pt-1">
+      <p className="text-xs text-surface-400 text-center pt-1">
         Or type any question in the box below
       </p>
     </div>

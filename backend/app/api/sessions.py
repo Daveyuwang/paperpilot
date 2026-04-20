@@ -1,9 +1,11 @@
 import uuid
 import structlog
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
-from app.models.orm import Session
+from app.models.orm import Session, Workspace
 from app.db.postgres import get_db
 from app.db.redis_client import get_session_state, delete_session_state
 from app.api.guest import require_guest_id, get_owned_paper_or_404, get_owned_session_or_404
@@ -11,6 +13,34 @@ from app.models.schemas import SessionOut
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+
+class WorkspaceSessionCreate(BaseModel):
+    workspace_id: str
+
+
+@router.post("/workspace/console", response_model=SessionOut)
+async def create_workspace_session(
+    body: WorkspaceSessionCreate,
+    guest_id: str = Depends(require_guest_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a workspace-level console session (no paper)."""
+    result = await db.execute(
+        select(Workspace).where(Workspace.id == body.workspace_id, Workspace.guest_id == guest_id)
+    )
+    ws = result.scalar_one_or_none()
+    if not ws:
+        ws = Workspace(id=body.workspace_id, guest_id=guest_id, title="My Research Workspace")
+        db.add(ws)
+        await db.flush()
+
+    session = Session(id=str(uuid.uuid4()), guest_id=guest_id, paper_id=None, workspace_id=body.workspace_id)
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+    logger.info("workspace_session_created", session_id=session.id, workspace_id=body.workspace_id, guest_id=guest_id)
+    return SessionOut.model_validate(session)
 
 
 @router.post("/{paper_id}", response_model=SessionOut)

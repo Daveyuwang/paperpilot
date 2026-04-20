@@ -39,7 +39,16 @@ async def init_db() -> None:
                 "ON papers (guest_id, created_at DESC)"
             )
         )
+        await conn.execute(text("ALTER TABLE papers ADD COLUMN IF NOT EXISTS workspace_id VARCHAR(36)"))
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_papers_workspace_id "
+                "ON papers (workspace_id)"
+            )
+        )
         await conn.execute(text("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS guest_id VARCHAR(64)"))
+        await conn.execute(text("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS workspace_id VARCHAR(36)"))
+        await conn.execute(text("ALTER TABLE sessions ALTER COLUMN paper_id DROP NOT NULL"))
         await conn.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS ix_sessions_guest_paper_last_active "

@@ -4,6 +4,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from datetime import datetime
 
 from app.agents.graph import run_agent_turn
+from app.agents.console import run_console_turn
 from app.db.postgres import AsyncSessionLocal
 from app.models.orm import Session
 
@@ -31,9 +32,11 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
             return
         session.last_active = datetime.utcnow()
         await db.commit()
+        is_console_session = session.paper_id is None
+        workspace_id = session.workspace_id
 
     await websocket.accept()
-    logger.info("ws_connected", session_id=session_id, guest_id=guest_id)
+    logger.info("ws_connected", session_id=session_id, guest_id=guest_id, is_console=is_console_session)
 
     try:
         while True:
@@ -51,16 +54,26 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
 
             question_id = data.get("question_id")
             mode_override = data.get("mode_override") or None
+            context = data.get("context") or {}
 
-            # Stream agent output back over the WebSocket
-            async for message in run_agent_turn(
-                session_id,
-                question,
-                question_id,
-                mode_override=mode_override,
-                guest_id=guest_id,
-            ):
-                await websocket.send_json(message)
+            if is_console_session:
+                async for message in run_console_turn(
+                    session_id=session_id,
+                    workspace_id=workspace_id or "",
+                    question=question,
+                    guest_id=guest_id,
+                    context=context,
+                ):
+                    await websocket.send_json(message)
+            else:
+                async for message in run_agent_turn(
+                    session_id,
+                    question,
+                    question_id,
+                    mode_override=mode_override,
+                    guest_id=guest_id,
+                ):
+                    await websocket.send_json(message)
 
     except WebSocketDisconnect:
         logger.info("ws_disconnected", session_id=session_id, guest_id=guest_id)

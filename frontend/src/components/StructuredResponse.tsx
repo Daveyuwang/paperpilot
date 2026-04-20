@@ -28,11 +28,11 @@ interface Block {
 }
 
 const LABEL_META: Record<string, { color: string; bg: string; border: string }> = {
-  "Direct Answer":  { color: "text-accent-400",   bg: "bg-accent-600/10",   border: "border-accent-600/20" },
-  "Evidence":       { color: "text-emerald-400",  bg: "bg-emerald-900/10",  border: "border-emerald-700/20" },
-  "Plain Language": { color: "text-purple-400",   bg: "",                   border: "" },
-  "What This Means":{ color: "text-amber-400",    bg: "",                   border: "" },
-  "Uncertainty":    { color: "text-red-400",      bg: "bg-red-900/10",      border: "border-red-700/20" },
+  "Direct Answer":  { color: "text-accent-600",   bg: "bg-accent-50",       border: "border-accent-200" },
+  "Evidence":       { color: "text-emerald-700",  bg: "bg-emerald-50",      border: "border-emerald-200" },
+  "Plain Language": { color: "text-purple-700",   bg: "",                   border: "" },
+  "What This Means":{ color: "text-amber-700",    bg: "",                   border: "" },
+  "Uncertainty":    { color: "text-red-600",      bg: "bg-red-50",          border: "border-red-200" },
 };
 
 // ── Parser ─────────────────────────────────────────────────────────────────
@@ -72,7 +72,7 @@ function ResponseBlock({ label, text }: Block) {
       : ""
     }>
       {label && (
-        <p className={`text-[11px] font-semibold uppercase tracking-wider mb-1.5 ${meta?.color ?? "text-gray-400"}`}>
+        <p className={`text-[11px] font-semibold uppercase tracking-wider mb-1.5 ${meta?.color ?? "text-surface-500"}`}>
           {label}
         </p>
       )}
@@ -81,7 +81,7 @@ function ResponseBlock({ label, text }: Block) {
       ) : label === "Uncertainty" ? (
         <UncertaintySection text={text} />
       ) : (
-        <p className="text-gray-200 whitespace-pre-wrap">{text}</p>
+        <p className="text-surface-700 whitespace-pre-wrap">{text}</p>
       )}
     </div>
   );
@@ -91,13 +91,13 @@ function ResponseBlock({ label, text }: Block) {
 
 function EvidenceSection({ text }: { text: string }) {
   if (text.startsWith("No relevant passages")) {
-    return <p className="text-gray-500 italic text-sm">{text}</p>;
+    return <p className="text-surface-400 italic text-sm">{text}</p>;
   }
 
   const lines = text.split("\n").filter((l) => l.trim().startsWith("•") || l.trim().startsWith("-"));
 
   if (lines.length === 0) {
-    return <p className="text-gray-300 whitespace-pre-wrap text-sm">{text}</p>;
+    return <p className="text-surface-600 whitespace-pre-wrap text-sm">{text}</p>;
   }
 
   return (
@@ -123,11 +123,11 @@ function EvidenceSection({ text }: { text: string }) {
               <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" title="System inference" />
             )}
             {!isAuthor && !isInferred && (
-              <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-gray-600 flex-shrink-0" />
+              <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-surface-400 flex-shrink-0" />
             )}
-            <span className="text-gray-300 text-sm flex-1">
+            <span className="text-surface-600 text-sm flex-1">
               {isInferred && (
-                <span className="text-amber-400/70 text-[10px] font-semibold uppercase mr-1.5">Inferred</span>
+                <span className="text-amber-600 text-[10px] font-semibold uppercase mr-1.5">Inferred</span>
               )}
               <span dangerouslySetInnerHTML={{ __html: highlighted }} />
             </span>
@@ -142,8 +142,8 @@ function EvidenceSection({ text }: { text: string }) {
 
 function UncertaintySection({ text }: { text: string }) {
   return (
-    <div className="text-sm text-red-300/80 whitespace-pre-wrap">
-      <span className="text-red-400 font-semibold mr-1">⚠</span>
+    <div className="text-sm text-red-600 whitespace-pre-wrap">
+      <span className="text-red-500 font-semibold mr-1">⚠</span>
       {text}
     </div>
   );

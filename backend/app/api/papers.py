@@ -1,9 +1,10 @@
 import os
 import uuid
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from typing import Optional
 
 from app.api.guest import require_guest_id, require_guest_id_for_download, get_owned_paper_or_404
 from app.db.postgres import get_db
@@ -22,6 +23,7 @@ router = APIRouter()
 async def upload_paper(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    workspace_id: Optional[str] = Form(default=None),
     guest_id: str = Depends(require_guest_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -47,6 +49,7 @@ async def upload_paper(
     paper = Paper(
         id=paper_id,
         guest_id=guest_id,
+        workspace_id=workspace_id,
         filename=file.filename,
         status=PaperStatus.pending,
     )
@@ -74,14 +77,14 @@ async def upload_paper(
 
 @router.get("/", response_model=list[PaperListItem])
 async def list_papers(
+    workspace_id: Optional[str] = Query(default=None),
     guest_id: str = Depends(require_guest_id),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Paper)
-        .where(Paper.guest_id == guest_id)
-        .order_by(Paper.created_at.desc())
-    )
+    stmt = select(Paper).where(Paper.guest_id == guest_id)
+    if workspace_id:
+        stmt = stmt.where(Paper.workspace_id == workspace_id)
+    result = await db.execute(stmt.order_by(Paper.created_at.desc()))
     return [PaperListItem.model_validate(p) for p in result.scalars()]
 
 
@@ -116,7 +119,10 @@ async def delete_paper(
     except Exception as exc:
         logger.warning("paper_qdrant_cleanup_failed", paper_id=paper_id, error=str(exc))
 
-    await delete_bm25_index(paper_id)
+    try:
+        await delete_bm25_index(paper_id)
+    except Exception as exc:
+        logger.warning("paper_bm25_cleanup_failed", paper_id=paper_id, error=str(exc))
 
     # Remove PDF file
     pdf_path = os.path.join(settings.upload_dir, f"{paper_id}.pdf")

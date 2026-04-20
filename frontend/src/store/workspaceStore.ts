@@ -1,0 +1,170 @@
+import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
+
+export type ViewerTab = "reader" | "deliverable" | "sources" | "agenda" | "concepts";
+export type NavItem = "workspace" | "console" | "reader" | "deep-research" | "proposal" | "settings";
+
+export interface Workspace {
+  id: string;
+  title: string;
+  objective: string;
+  createdAt: number;
+  updatedAt: number;
+  activePaperId: string | null;
+  activeViewerTab: ViewerTab;
+}
+
+interface WorkspaceStore {
+  workspaces: Record<string, Workspace>;
+  activeWorkspaceId: string | null;
+  appView: "home" | "shell";
+  selectedNav: NavItem;
+
+  createWorkspace: (title: string, objective?: string) => Workspace;
+  deleteWorkspace: (id: string) => void;
+  renameWorkspace: (id: string, title: string) => void;
+  setObjective: (id: string, obj: string) => void;
+  openWorkspace: (id: string) => void;
+  goHome: () => void;
+
+  getActiveWorkspace: () => Workspace | null;
+  setActiveViewerTab: (tab: ViewerTab) => void;
+  setActivePaperId: (id: string | null) => void;
+  setSelectedNav: (item: NavItem) => void;
+}
+
+const VALID_VIEWER_TABS: ViewerTab[] = ["reader", "deliverable", "sources", "agenda", "concepts"];
+const VALID_NAV_ITEMS: NavItem[] = ["workspace", "console", "reader", "deep-research", "proposal", "settings"];
+
+function wsId(): string {
+  return `ws_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export const useWorkspaceStore = create<WorkspaceStore>()(
+  persist(
+    (set, get) => ({
+      workspaces: {},
+      activeWorkspaceId: null,
+      appView: "home",
+      selectedNav: "workspace",
+
+      createWorkspace: (title, objective) => {
+        const id = wsId();
+        const now = Date.now();
+        const ws: Workspace = {
+          id,
+          title,
+          objective: objective ?? "",
+          createdAt: now,
+          updatedAt: now,
+          activePaperId: null,
+          activeViewerTab: "reader",
+        };
+        set((s) => ({ workspaces: { ...s.workspaces, [id]: ws } }));
+        return ws;
+      },
+
+      deleteWorkspace: (id) =>
+        set((s) => {
+          const { [id]: _, ...rest } = s.workspaces;
+          const patch: Partial<WorkspaceStore> = { workspaces: rest };
+          if (s.activeWorkspaceId === id) {
+            patch.activeWorkspaceId = null;
+            patch.appView = "home";
+          }
+          return patch as any;
+        }),
+
+      renameWorkspace: (id, title) =>
+        set((s) => {
+          const ws = s.workspaces[id];
+          if (!ws) return s;
+          return {
+            workspaces: { ...s.workspaces, [id]: { ...ws, title, updatedAt: Date.now() } },
+          };
+        }),
+
+      setObjective: (id, obj) =>
+        set((s) => {
+          const ws = s.workspaces[id];
+          if (!ws) return s;
+          return {
+            workspaces: { ...s.workspaces, [id]: { ...ws, objective: obj, updatedAt: Date.now() } },
+          };
+        }),
+
+      openWorkspace: (id) =>
+        set({ activeWorkspaceId: id, appView: "shell", selectedNav: "workspace" }),
+
+      goHome: () => set({ appView: "home" }),
+
+      getActiveWorkspace: () => {
+        const { workspaces, activeWorkspaceId } = get();
+        if (!activeWorkspaceId) return null;
+        return workspaces[activeWorkspaceId] ?? null;
+      },
+
+      setActiveViewerTab: (tab) =>
+        set((s) => {
+          const ws = s.activeWorkspaceId ? s.workspaces[s.activeWorkspaceId] : null;
+          if (!ws) return s;
+          return {
+            workspaces: { ...s.workspaces, [ws.id]: { ...ws, activeViewerTab: tab, updatedAt: Date.now() } },
+          };
+        }),
+
+      setActivePaperId: (id) =>
+        set((s) => {
+          const ws = s.activeWorkspaceId ? s.workspaces[s.activeWorkspaceId] : null;
+          if (!ws) return s;
+          return {
+            workspaces: { ...s.workspaces, [ws.id]: { ...ws, activePaperId: id, updatedAt: Date.now() } },
+          };
+        }),
+
+      setSelectedNav: (item) => set({ selectedNav: item }),
+    }),
+    {
+      name: "pp_workspace",
+      storage: createJSONStorage(() => localStorage),
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+
+        // Migrate from old single-workspace shape
+        const raw = state as any;
+        if (raw.workspace && !raw.workspaces) {
+          const old = raw.workspace;
+          const now = Date.now();
+          const migrated: Workspace = {
+            id: "default",
+            title: old.title || "My Research Workspace",
+            objective: old.objective || "",
+            createdAt: now,
+            updatedAt: now,
+            activePaperId: old.activePaperId ?? null,
+            activeViewerTab: VALID_VIEWER_TABS.includes(old.activeViewerTab)
+              ? old.activeViewerTab
+              : old.activeViewerTab === "trail" ? "agenda" : "reader",
+          };
+          state.workspaces = { default: migrated };
+          state.activeWorkspaceId = "default";
+          state.appView = "shell";
+          delete raw.workspace;
+        }
+
+        // Validate nav
+        if (!VALID_NAV_ITEMS.includes(state.selectedNav)) {
+          state.selectedNav = "workspace";
+        }
+
+        // Validate active workspace viewer tab
+        if (state.activeWorkspaceId && state.workspaces[state.activeWorkspaceId]) {
+          const ws = state.workspaces[state.activeWorkspaceId];
+          if (!VALID_VIEWER_TABS.includes(ws.activeViewerTab)) {
+            ws.activeViewerTab = "reader";
+          }
+        }
+      },
+    }
+  )
+);

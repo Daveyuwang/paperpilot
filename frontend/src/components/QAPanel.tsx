@@ -1,9 +1,13 @@
 import React, { useRef, useEffect, useState, useCallback } from "react";
-import { Send, Loader2, ArrowRight, Square } from "lucide-react";
+import { Send, Loader2, ArrowRight, Square, RotateCcw, MessageSquare, Search, GitCompare, PenTool, Sparkles } from "lucide-react";
 import clsx from "clsx";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useChatStore } from "@/store/chatStore";
 import { usePaperStore } from "@/store/paperStore";
+import { useAgendaStore } from "@/store/agendaStore";
+import { useWorkspaceStore } from "@/store/workspaceStore";
+import { useSourceStore } from "@/store/sourceStore";
+import { useDeliverableStore } from "@/store/deliverableStore";
 import type {
   AnswerJSON,
   SuggestedQuestion,
@@ -21,6 +25,8 @@ interface Props {
   onNextQuestion?: (q: { id: string; question: string; stage: string }) => void;
   queuedQuestion?: { id?: string; question: string; nonce: number } | null;
   onQueuedQuestionHandled?: (nonce: number) => void;
+  forceConsole?: boolean;
+  centered?: boolean;
 }
 
 let lastAutoSubmittedQueuedNonce: number | null = null;
@@ -56,8 +62,11 @@ export function QAPanel({
   onNextQuestion,
   queuedQuestion = null,
   onQueuedQuestionHandled,
+  forceConsole = false,
+  centered = false,
 }: Props) {
-  const { activePaper, activeSession, questions } = usePaperStore();
+  const { activePaper, activeSession, questions, newSession } = usePaperStore();
+  const { getActiveWorkspace } = useWorkspaceStore();
   const {
     messages,
     isGenerating,
@@ -80,11 +89,39 @@ export function QAPanel({
     setCurrentMode,
     setCurrentScopeLabel,
     markQuestionCovered,
+    getConsoleSessionId,
+    switchToSession,
   } = useChatStore();
+
+  const { markDoneByTrailId, resolveUpNext } = useAgendaStore();
+  const { getIncludedSources } = useSourceStore();
+  const { getActiveDeliverable, getSelectedSectionId } = useDeliverableStore();
+
+  const activeWs = getActiveWorkspace();
+  const consoleSessionId = activeWs ? getConsoleSessionId(activeWs.id) : null;
+  const effectiveSessionId = forceConsole
+    ? consoleSessionId
+    : (activeSession?.id ?? consoleSessionId);
+
+  // Switch chatStore messages to the correct session when this panel mounts or session changes
+  useEffect(() => {
+    if (!effectiveSessionId) return;
+    const current = useChatStore.getState().activeSessionId;
+    if (current !== effectiveSessionId) {
+      switchToSession(effectiveSessionId);
+    }
+  }, [effectiveSessionId, switchToSession]);
+
+  const wid = activeWs?.id ?? "default";
+  const activeDeliverable = getActiveDeliverable(wid);
+  const focusedSectionId = activeDeliverable ? getSelectedSectionId(activeDeliverable.id) : null;
+  const focusedSection = activeDeliverable?.sections.find((s) => s.id === focusedSectionId);
+  const includedSourceCount = getIncludedSources(wid).length;
 
   const [input, setInput] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [showSlowStatusHint, setShowSlowStatusHint] = useState(false);
+  const [newChatConfirmOpen, setNewChatConfirmOpen] = useState(false);
   const pendingAssistantId = useRef<string | null>(null);
   const pendingCitationsRef = useRef<Citation[]>([]);
   const streamingTextRef = useRef<string>("");
@@ -141,10 +178,32 @@ export function QAPanel({
       case "answer_done": {
         const id = pendingAssistantId.current;
         if (id) {
+          // If we never received answer_json or streaming text, set a fallback
+          const msg = useChatStore.getState().messages.find((m) => m.id === id);
+          if (msg && !msg.answerJson && !msg.streamingText && !msg.content) {
+            const fallbackJson = (typeof msg === "object" && msg.content === "")
+              ? (msg as any) : null;
+            if (!fallbackJson?.answerJson) {
+              setAnswerJson(id, {
+                direct_answer: "",
+                key_points: null,
+                evidence: [],
+                plain_language: null,
+                bigger_picture: null,
+                uncertainty: null,
+              } as AnswerJSON);
+            }
+          }
           finalizeMessage(id);
           pendingCitationsRef.current = [];
           pendingAssistantId.current = null;
           streamingTextRef.current = "";
+          // Mark the active trail question's agenda item as done
+          const activeQId = useChatStore.getState().activeQuestionId;
+          if (activeQId) {
+            markDoneByTrailId(activeQId);
+            resolveUpNext();
+          }
           // Delay suggestions until done confirmation has faded (3s visible + 600ms fade + buffer)
           setTimeout(() => setShowSuggestions(true), 3800);
         }
@@ -178,10 +237,10 @@ export function QAPanel({
   }, [
     setStatus, setCurrentMode, setCurrentScopeLabel, setStreamingText, setAnswerJson, setCitations,
     setSuggestedQuestions, finalizeMessage, failMessage, markQuestionCovered,
-    onHighlight, onNextQuestion,
+    onHighlight, onNextQuestion, markDoneByTrailId, resolveUpNext,
   ]);
 
-  const { sendMessage, disconnect, reconnect } = useWebSocket(activeSession?.id ?? null, handleWSMessage);
+  const { sendMessage, disconnect, reconnect } = useWebSocket(effectiveSessionId, handleWSMessage);
 
   const submit = useCallback((question: string, questionId?: string) => {
     if (!question.trim() || isGenerating) return;
@@ -193,10 +252,17 @@ export function QAPanel({
     pendingAssistantId.current = assistantId;
     pendingCitationsRef.current = [];
     streamingTextRef.current = "";
-    sendMessage(question, questionId);
+
+    const context = !activePaper && activeWs ? {
+      active_paper_id: null,
+      active_deliverable_id: null,
+      focused_section_id: null,
+    } : undefined;
+
+    sendMessage(question, questionId, undefined, context);
     setInput("");
     if (textareaRef.current) textareaRef.current.style.height = "auto";
-  }, [isGenerating, setActiveQuestionId, addUserMessage, startAssistantMessage, sendMessage]);
+  }, [isGenerating, setActiveQuestionId, addUserMessage, startAssistantMessage, sendMessage, activePaper?.id, activeWs]);
 
   const handleStop = useCallback(() => {
     const id = pendingAssistantId.current;
@@ -281,12 +347,29 @@ export function QAPanel({
     ta.style.height = Math.min(ta.scrollHeight, 120) + "px";
   };
 
+  const colClass = centered ? "max-w-[820px] mx-auto w-full" : "";
+
   return (
     <div className="flex flex-col h-full">
-      {/* ── Scrollable messages ──────────────────────────────────────────── */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-5 space-y-5">
+      {/* ── New chat header (paper mode only) ──────────────────────────────── */}
+      {messages.length > 0 && activePaper && !forceConsole && (
+        <div className="flex-shrink-0 px-4 py-1.5 border-b border-surface-100 flex items-center justify-end">
+          <button
+            onClick={() => setNewChatConfirmOpen(true)}
+            className="text-[11px] text-surface-400 hover:text-surface-600 flex items-center gap-1 transition-colors"
+            title="Start a new chat session for this paper"
+          >
+            <RotateCcw className="w-3 h-3" />
+            New chat
+          </button>
+        </div>
+      )}
 
-        {messages.length === 0 && activePaper?.status === "ready" && (
+      {/* ── Scrollable messages ──────────────────────────────────────────── */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-5">
+        <div className={clsx("space-y-5", colClass)}>
+
+        {messages.length === 0 && !forceConsole && activePaper?.status === "ready" && (
           <WelcomePanel
             paper={activePaper}
             questions={questions}
@@ -294,13 +377,26 @@ export function QAPanel({
           />
         )}
 
-        {messages.length === 0 && (!activePaper || activePaper.status !== "ready") && (
-          <div className="flex items-center justify-center h-full text-gray-500 text-sm text-center">
+        {messages.length === 0 && !forceConsole && activePaper && activePaper.status !== "ready" && (
+          <div className="flex items-center justify-center h-full text-surface-500 text-sm text-center">
             <div>
               <p className="font-medium">Ask anything about the paper</p>
-              <p className="text-xs mt-1 text-gray-600">Or follow the guided question trail →</p>
+              <p className="text-xs mt-1 text-surface-400">Or follow the guided question trail</p>
             </div>
           </div>
+        )}
+
+        {messages.length === 0 && !forceConsole && !activePaper && (
+          <div className="flex items-center justify-center h-full text-surface-500 text-sm text-center">
+            <div>
+              <p className="font-medium">Paper QA</p>
+              <p className="text-xs mt-1 text-surface-400">Select a paper to start asking questions</p>
+            </div>
+          </div>
+        )}
+
+        {messages.length === 0 && forceConsole && (
+          <ConsoleEmptyState onFillInput={(text) => { setInput(text); textareaRef.current?.focus(); }} />
         )}
 
         {messages.map((msg, idx) => {
@@ -322,15 +418,15 @@ export function QAPanel({
               {/* Assistant avatar dot */}
               {msg.role === "assistant" && (
                 <div className="flex-shrink-0 pt-1">
-                  <div className="w-7 h-7 rounded-full bg-accent-600/20 flex items-center justify-center">
-                    <span className="text-accent-400 text-xs font-bold">P</span>
+                  <div className="w-7 h-7 rounded-full bg-accent-100 flex items-center justify-center">
+                    <span className="text-accent-600 text-xs font-bold">P</span>
                   </div>
                 </div>
               )}
 
               {/* User bubble */}
               {msg.role === "user" && (
-                <div className="max-w-[80%] bg-accent-600/20 rounded-2xl rounded-tr-sm px-4 py-3 text-sm text-gray-100">
+                <div className="max-w-[80%] bg-accent-100 rounded-2xl rounded-tr-sm px-4 py-3 text-sm text-accent-700">
                   {msg.content}
                 </div>
               )}
@@ -353,17 +449,17 @@ export function QAPanel({
                 // Phase B: content available — full bubble, animate in on first appearance
                 return (
                   <FadeInUp animate={isCurrentlyStreaming && hasContent}>
-                    <div className="flex-1 min-w-0 bg-surface-800 border border-white/5 rounded-2xl rounded-tl-sm px-5 py-4">
+                    <div className="flex-1 min-w-0 bg-surface-50 border border-surface-200 rounded-2xl rounded-tl-sm px-5 py-4">
 
                       {/* Minimal in-bubble streaming indicator (before phase1Complete) */}
                       {isCurrentlyStreaming && !msg.phase1Complete && (
                         <div className="flex items-center justify-between gap-2 mb-3">
                           <div className="flex items-center gap-2">
-                            <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400 flex-shrink-0" />
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-accent-500 flex-shrink-0" />
                             <div className="min-w-0">
-                              <span className="text-xs text-gray-500">{getActivityLabel(statusText)}</span>
+                              <span className="text-xs text-surface-500">{getActivityLabel(statusText)}</span>
                               {showSlowStatusHint && (
-                                <div className="mt-0.5 text-[11px] text-gray-600">
+                                <div className="mt-0.5 text-[11px] text-surface-400">
                                   Taking a bit longer than expected.
                                 </div>
                               )}
@@ -371,7 +467,7 @@ export function QAPanel({
                           </div>
                           <button
                             onClick={handleStop}
-                            className="flex items-center gap-1 text-xs text-gray-500 hover:text-red-400 transition-colors"
+                            className="flex items-center gap-1 text-xs text-surface-400 hover:text-red-500 transition-colors"
                             title="Stop generating"
                           >
                             <Square className="w-3 h-3" />
@@ -424,20 +520,20 @@ export function QAPanel({
 
                       {/* Legacy plain-text fallback */}
                       {!msg.answerJson && !msg.isStreaming && !msg.streamingText && msg.content && !msg.content.startsWith("[Error]") && (
-                        <p className="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">
+                        <p className="text-sm text-surface-500 leading-relaxed whitespace-pre-wrap">
                           {msg.content}
                         </p>
                       )}
 
                       {/* Persistent citation chips */}
                       {!isCurrentlyStreaming && msg.citations.length > 0 && (
-                        <div className="mt-3 pt-3 border-t border-white/5 flex flex-wrap gap-1.5">
+                        <div className="mt-3 pt-3 border-t border-surface-200 flex flex-wrap gap-1.5">
                           {msg.citations.map((c, i) => {
                             const sec = cleanCitationSection(c.section_title);
                             return (
                               <button
                                 key={i}
-                                className="text-xs text-accent-400/70 bg-accent-600/10 px-2 py-0.5 rounded hover:bg-accent-600/20 transition-colors"
+                                className="text-xs text-accent-600 bg-accent-50 px-2 py-0.5 rounded hover:bg-accent-100 transition-colors"
                                 onClick={() => onHighlight([c])}
                                 title="Jump to in PDF"
                               >
@@ -480,46 +576,92 @@ export function QAPanel({
         )}
 
         <div className="h-1" />
-      </div>
-
-      {/* ── Fixed input ───────────────────────────────────────────────────── */}
-      <div className="flex-shrink-0 px-4 py-3 border-t border-white/5 bg-surface-900">
-        <div className="flex gap-2 items-end">
-          <textarea
-            ref={textareaRef}
-            className={clsx(
-              "flex-1 bg-surface-800 border border-white/10 rounded-xl px-4 py-3 text-sm text-gray-100",
-              "resize-none focus:outline-none focus:border-accent-600/50 transition-colors",
-              "placeholder:text-gray-600 leading-relaxed"
-            )}
-            style={{ minHeight: "44px", maxHeight: "120px" }}
-            rows={1}
-            placeholder="Ask a question… (Shift+Enter for newline)"
-            value={input}
-            onChange={handleTextareaInput}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                submit(input);
-              }
-            }}
-            disabled={isGenerating}
-          />
-          <button
-            className="btn-primary p-3 flex-shrink-0 rounded-xl disabled:opacity-40 transition-opacity"
-            onClick={() => submit(input)}
-            disabled={!input.trim() || isGenerating}
-          >
-            {isGenerating
-              ? <Loader2 className="w-4 h-4 animate-spin" />
-              : <Send className="w-4 h-4" />
-            }
-          </button>
         </div>
       </div>
+
+      {/* ── Composer ─────────────────────────────────────────────────────── */}
+      <div className="flex-shrink-0 px-4 py-3 bg-white border-t border-surface-100">
+        <div className={clsx(colClass)}>
+          <div className={clsx(
+            "flex items-end gap-2 rounded-2xl border border-surface-200 bg-surface-50 px-3 py-2",
+            "focus-within:border-accent-400 focus-within:ring-1 focus-within:ring-accent-400 transition-all"
+          )}>
+            <textarea
+              ref={textareaRef}
+              className={clsx(
+                "flex-1 bg-transparent text-sm text-surface-800 resize-none",
+                "focus:outline-none placeholder:text-surface-400 leading-snug",
+                isGenerating && "opacity-60"
+              )}
+              style={{ minHeight: "36px", maxHeight: "120px" }}
+              rows={1}
+              placeholder={activePaper && !forceConsole ? "Ask about this paper..." : "Ask about this workspace..."}
+              value={input}
+              onChange={handleTextareaInput}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  submit(input);
+                }
+              }}
+              disabled={isGenerating}
+              {...(forceConsole ? { "data-console-input": "" } : {})}
+            />
+            <button
+              className={clsx(
+                "flex-shrink-0 rounded-xl transition-all duration-150",
+                "w-8 h-8 flex items-center justify-center focus:outline-none",
+                !input.trim() || isGenerating
+                  ? "text-surface-300"
+                  : "bg-accent-600 text-white hover:bg-accent-700 shadow-sm"
+              )}
+              onClick={() => submit(input)}
+              disabled={!input.trim() || isGenerating}
+            >
+              {isGenerating
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                : <Send className="w-3.5 h-3.5" />
+              }
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* ── New chat confirmation ─────────────────────────────────────────── */}
+      {newChatConfirmOpen && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/20" onClick={() => setNewChatConfirmOpen(false)} />
+          <div className="relative w-[360px] max-w-[calc(100%-24px)] rounded-xl border border-surface-200 bg-white shadow-lg">
+            <div className="px-4 py-3 border-b border-surface-100">
+              <div className="text-sm font-semibold text-surface-800">Start a new chat?</div>
+              <div className="text-xs text-surface-500 mt-1">
+                This will create a new session. Your previous chat is saved.
+              </div>
+            </div>
+            <div className="px-4 py-2.5 flex items-center justify-end gap-2">
+              <button
+                className="px-3 py-1.5 rounded-lg text-xs text-surface-600 hover:bg-surface-100 transition-colors"
+                onClick={() => setNewChatConfirmOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent-600 text-white hover:bg-accent-700 transition-colors"
+                onClick={async () => {
+                  setNewChatConfirmOpen(false);
+                  await newSession();
+                }}
+              >
+                New chat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
 
 // ── Activity strip (Phase A: before first token) ──────────────────────────
 
@@ -554,9 +696,9 @@ function ActivityStrip({
 }) {
   return (
     <div className="flex items-center gap-3 py-2.5 flex-1 min-w-0">
-      <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400 flex-shrink-0" />
+      <Loader2 className="w-3.5 h-3.5 animate-spin text-accent-500 flex-shrink-0" />
       <div className="flex-1 min-w-0">
-        <div className="text-sm text-gray-400">{getActivityLabel(statusText)}</div>
+        <div className="text-sm text-surface-500">{getActivityLabel(statusText)}</div>
         {showSlowHint && (
           <div className="text-shimmer-subtle mt-0.5 text-[11px]">
             Taking a bit longer than expected.
@@ -565,7 +707,7 @@ function ActivityStrip({
       </div>
       <button
         onClick={onStop}
-        className="flex items-center gap-1 text-xs text-gray-600 hover:text-red-400 transition-colors"
+        className="flex items-center gap-1 text-xs text-surface-400 hover:text-red-500 transition-colors"
         title="Stop generating"
       >
         <Square className="w-3 h-3" />
@@ -648,19 +790,19 @@ function SuggestionsBlock({
     <div className="pl-11 space-y-2">
       {primary && (
         <button
-          className="w-full text-left px-4 py-3 rounded-xl border border-accent-600/30 bg-accent-600/10 hover:bg-accent-600/20 flex items-start gap-3 group transition-colors"
+          className="w-full text-left px-4 py-3 rounded-xl border border-accent-200 bg-accent-50 hover:bg-accent-100 flex items-start gap-3 group transition-colors"
           onClick={() => onAsk(primary.question, primary.id)}
         >
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 mb-1">
-              <span className={clsx("w-1.5 h-1.5 rounded-full flex-shrink-0", STAGE_DOT[primary.stage] ?? "bg-gray-400")} />
-              <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+              <span className={clsx("w-1.5 h-1.5 rounded-full flex-shrink-0", STAGE_DOT[primary.stage] ?? "bg-surface-400")} />
+              <span className="text-[10px] font-semibold text-surface-500 uppercase tracking-wider">
                 Up next · {STAGE_LABEL[primary.stage] ?? primary.stage}
               </span>
             </div>
-            <p className="text-sm text-gray-200 leading-snug">{primary.question}</p>
+            <p className="text-sm text-surface-700 leading-snug">{primary.question}</p>
           </div>
-          <ArrowRight className="w-4 h-4 flex-shrink-0 mt-0.5 text-accent-400/50 group-hover:text-accent-400 transition-colors" />
+          <ArrowRight className="w-4 h-4 flex-shrink-0 mt-0.5 text-accent-400 group-hover:text-accent-600 transition-colors" />
         </button>
       )}
 
@@ -669,20 +811,57 @@ function SuggestionsBlock({
           {secondary.map((q) => (
             <button
               key={q.id}
-              className="w-full text-left px-3 py-2.5 rounded-lg border border-white/8 bg-white/[0.03] hover:bg-white/[0.06] transition-colors"
+              className="w-full text-left px-3 py-2.5 rounded-lg border border-surface-200 bg-surface-50 hover:bg-surface-100 transition-colors"
               onClick={() => onAsk(q.question, q.id)}
             >
               <div className="flex items-center gap-1.5 mb-1">
-                <span className={clsx("w-1 h-1 rounded-full flex-shrink-0", STAGE_DOT[q.stage] ?? "bg-gray-400")} />
-                <span className="text-[10px] text-gray-600 uppercase tracking-wide">
+                <span className={clsx("w-1 h-1 rounded-full flex-shrink-0", STAGE_DOT[q.stage] ?? "bg-surface-400")} />
+                <span className="text-[10px] text-surface-500 uppercase tracking-wide">
                   {STAGE_LABEL[q.stage] ?? q.stage}
                 </span>
               </div>
-              <p className="text-xs text-gray-400 leading-snug line-clamp-2">{q.question}</p>
+              <p className="text-xs text-surface-600 leading-snug line-clamp-2">{q.question}</p>
             </button>
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Console empty state ───────────────────────────────────────────────────
+
+const CONSOLE_ACTIONS = [
+  { label: "Find recent related work", icon: Search },
+  { label: "Compare included sources", icon: GitCompare },
+  { label: "Improve current draft", icon: PenTool },
+  { label: "Summarize active paper", icon: Sparkles },
+];
+
+function ConsoleEmptyState({ onFillInput }: { onFillInput: (text: string) => void }) {
+  return (
+    <div className="flex items-center justify-center min-h-[300px] py-12">
+      <div className="text-center max-w-md">
+        <div className="w-10 h-10 rounded-xl bg-surface-100 flex items-center justify-center mx-auto mb-4">
+          <MessageSquare className="w-5 h-5 text-surface-400" />
+        </div>
+        <h3 className="text-sm font-medium text-surface-700">Workspace Console</h3>
+        <p className="text-xs text-surface-400 mt-1.5 leading-relaxed">
+          Ask about the workspace, compare sources, discover papers, or work on drafts.
+        </p>
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
+          {CONSOLE_ACTIONS.map(({ label, icon: Icon }) => (
+            <button
+              key={label}
+              onClick={() => onFillInput(label)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-surface-600 bg-surface-50 border border-surface-200 rounded-lg hover:bg-surface-100 hover:border-surface-300 transition-colors"
+            >
+              <Icon className="w-3 h-3 text-surface-400" />
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

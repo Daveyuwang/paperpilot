@@ -24,6 +24,8 @@ interface ChatState {
   messages_by_session: Record<string, ChatMessage[]>;
   // Currently active session ID (persisted so onRehydrateStorage can restore messages)
   activeSessionId: string | null;
+  // Workspace console session IDs (persisted)
+  consoleSessionIdByWorkspace: Record<string, string>;
 
   statusText: string;
   isGenerating: boolean;
@@ -34,20 +36,13 @@ interface ChatState {
   currentScopeLabel: string;
 
   // Actions
-  /**
-   * Switch to a different session. Saves current messages to messages_by_session,
-   * then loads the new session's messages. Resets all transient state.
-   */
   switchToSession: (newSessionId: string, coveredIds?: string[]) => void;
-  /**
-   * Remove a session's messages from messages_by_session and clear active state
-   * if this was the active session. Used by deletePaper.
-   */
   clearSession: (sessionId: string) => void;
+  setConsoleSessionId: (workspaceId: string, sessionId: string) => void;
+  getConsoleSessionId: (workspaceId: string) => string | null;
   initSession: () => void;
   addUserMessage: (text: string) => string;
   startAssistantMessage: () => string;
-  /** Start an assistant message without a preceding user bubble (used for mode override actions) */
   startSilentAssistantMessage: () => string;
   appendContent: (id: string, chunk: string) => void;
   setStreamingText: (id: string, text: string) => void;
@@ -73,6 +68,7 @@ export const useChatStore = create<ChatState>()(
       messages: [],
       messages_by_session: {},
       activeSessionId: null,
+      consoleSessionIdByWorkspace: {},
       statusText: "",
       isGenerating: false,
       activeQuestionId: null,
@@ -126,6 +122,15 @@ export const useChatStore = create<ChatState>()(
               : {}),
           };
         }),
+
+      setConsoleSessionId: (workspaceId, sessionId) =>
+        set((s) => ({
+          consoleSessionIdByWorkspace: { ...s.consoleSessionIdByWorkspace, [workspaceId]: sessionId },
+        })),
+
+      getConsoleSessionId: (workspaceId) => {
+        return get().consoleSessionIdByWorkspace[workspaceId] ?? null;
+      },
 
       initSession: () =>
         set({
@@ -345,12 +350,13 @@ export const useChatStore = create<ChatState>()(
           s.messages
         ),
         activeSessionId: s.activeSessionId,
+        consoleSessionIdByWorkspace: s.consoleSessionIdByWorkspace,
       }),
       onRehydrateStorage: () => (state) => {
         if (!state) return;
-        // Migration: if storage predates this schema, initialize fields
         if (!state.messages_by_session) state.messages_by_session = {};
         if (state.activeSessionId === undefined) state.activeSessionId = null;
+        if (!state.consoleSessionIdByWorkspace) state.consoleSessionIdByWorkspace = {};
 
         // Clean up stale streaming messages across all sessions
         for (const sid of Object.keys(state.messages_by_session)) {

@@ -11,63 +11,141 @@
     scroll-behavior: smooth;
   }
 
+  body {
+    background-color: #faf9f7;
+    color: #3d3830;
+    font-family: "Inter", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
   }
 
   ::-webkit-scrollbar-track {
-    background: #212529;
+    background: transparent;
   }
 
   ::-webkit-scrollbar-thumb {
-    background: #495057;
+    background: #ddd8d0;
     border-radius: 3px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: #6c757d;
+    background: #b8b0a4;
   }
 
   @keyframes subtle-text-shimmer {
-    0% {
-      background-position: 200% 50%;
-    }
-
-    100% {
-      background-position: -200% 50%;
-    }
+    0%   { background-position: 200% 50%; }
+    100% { background-position: -200% 50%; }
   }
 }
 
 @layer components {
   .panel {
-    @apply bg-surface-800 rounded-xl border border-white/5;
+    background-color: #f4f2ee;
+    border-radius: 0.75rem;
+    border: 1px solid #ede9e3;
   }
 
   .btn-primary {
-    @apply bg-accent-600 hover:bg-accent-500 text-white font-medium px-4 py-2 rounded-lg
-           transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed;
+    @apply font-medium px-4 py-2 rounded-lg transition-colors duration-150
+           disabled:opacity-40 disabled:cursor-not-allowed;
+    background-color: #2952d9;
+    color: #ffffff;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background-color: #3d6ff0;
   }
 
   .btn-ghost {
-    @apply text-gray-400 hover:text-gray-100 hover:bg-white/5 px-3 py-1.5 rounded-lg
-           transition-colors duration-150;
+    @apply px-3 py-1.5 rounded-lg transition-colors duration-150;
+    color: #8a8278;
+  }
+  .btn-ghost:hover {
+    color: #3d3830;
+    background-color: #f4f2ee;
   }
 
+  .input-base {
+    @apply text-sm px-3 py-2 border border-surface-200 rounded-lg bg-white
+           focus:outline-none focus:ring-1 focus:ring-accent-400
+           placeholder:text-surface-300;
+  }
+
+  .select-base {
+    @apply text-sm px-3 py-2 border border-surface-200 rounded-lg bg-white
+           focus:outline-none focus:ring-1 focus:ring-accent-400;
+  }
+
+  /* Typography */
+  .heading-serif {
+    font-family: "Lora", Georgia, Cambria, serif;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: #2a2520;
+  }
+
+  .heading-serif-lg {
+    font-family: "Lora", Georgia, Cambria, serif;
+    font-weight: 600;
+    font-size: 1.125rem;
+    line-height: 1.4;
+    letter-spacing: -0.015em;
+    color: #2a2520;
+  }
+
+  /* Nav items */
+  .nav-item {
+    @apply flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm
+           transition-colors duration-150 cursor-pointer w-full text-left;
+    color: #8a8278;
+  }
+  .nav-item:hover {
+    color: #3d3830;
+    background-color: #f4f2ee;
+  }
+
+  .nav-item-active {
+    @apply flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium
+           transition-colors duration-150 cursor-pointer w-full text-left;
+    color: #2a2520;
+    background-color: #ede9e3;
+  }
+
+  /* Viewer tabs */
+  .viewer-tab {
+    @apply px-3 py-1.5 text-xs font-medium rounded-md transition-colors duration-150 cursor-pointer;
+    color: #8a8278;
+  }
+  .viewer-tab:hover {
+    color: #3d3830;
+    background-color: #f4f2ee;
+  }
+
+  .viewer-tab-active {
+    @apply px-3 py-1.5 text-xs font-medium rounded-md transition-colors duration-150 cursor-pointer;
+    color: #2a2520;
+    background-color: #ede9e3;
+  }
+
+  /* Structured response labels */
   .structured-response [data-label] {
-    @apply font-semibold text-accent-400 text-xs uppercase tracking-wider mt-4 mb-1;
+    @apply font-semibold text-xs uppercase tracking-wider mt-4 mb-1;
+    color: #2952d9;
   }
 
+  /* Shimmer for loading text */
   .text-shimmer-subtle {
     color: transparent;
     background-image: linear-gradient(
       90deg,
-      rgba(107, 114, 128, 0.72) 0%,
-      rgba(156, 163, 175, 0.92) 45%,
-      rgba(224, 231, 255, 0.96) 50%,
-      rgba(156, 163, 175, 0.92) 55%,
-      rgba(107, 114, 128, 0.72) 100%
+      rgba(90, 84, 78, 0.6) 0%,
+      rgba(130, 122, 114, 0.85) 45%,
+      rgba(180, 172, 162, 0.95) 50%,
+      rgba(130, 122, 114, 0.85) 55%,
+      rgba(90, 84, 78, 0.6) 100%
     );
     background-size: 220% 100%;
     background-clip: text;

@@ -1,49 +1,25 @@
 # PaperPilot
 
-Agent-driven research assistant for PDFs: hybrid RAG, intent-routed multi-step LLM pipeline, evidence-grounded streaming Q&A, session memory, and structured concept maps.
+AI-powered research workspace for scholars. Upload PDFs, ask grounded questions with hybrid RAG, discover sources, manage structured deliverables, and run bounded deep research sessions.
 
-**Guided reading trail** — staged questions across Motivation, Approach, Experiments, and Takeaways.
+## Quick Start (Docker)
 
-<img src="screenshots/trail.png" width="480" alt="Guided reading trail" />
+```bash
+cp .env.example .env
+make setup
+```
 
-**Structured answers** — evidence-grounded responses with citations and streaming.
+Frontend: `http://localhost:5173`
+Backend: `http://localhost:8000`
 
-<img src="screenshots/ans-1.png" width="480" alt="Structured answer" />
+## Local Dev (No Docker)
 
-<img src="screenshots/ans-2.png" width="480" alt="Structured answer (detail)" />
-
-**Concept map** — LLM-generated graph of concepts and relations grounded in the paper.
-
-<img src="screenshots/concept.png" width="480" alt="Concept map" />
-
-**Prerequisites:** Docker + Docker Compose (recommended)
-
-## Local (Docker)
+Requires: Python 3.11+, Node 20+, PostgreSQL, Redis, Qdrant running locally.
 
 ```bash
 cp .env.example .env
 
-make setup
-```
-
-Or:
-
-```bash
-./scripts/setup.sh
-```
-
-## Dev (no Docker)
-
-Prereqs: Node 20+, Python 3.11+.
-
-```bash
-# .env → local Postgres, Redis, Qdrant URLs
-
 cd backend
-conda create -n paperpilot -y -c conda-forge python=3.11 nodejs=20
-conda activate paperpilot
-
-# Install Python deps
 pip install -r requirements.txt
 alembic upgrade head
 uvicorn app.main:app --reload
@@ -56,20 +32,19 @@ npm run dev
 
 ## Configure LLM (in-app)
 
-Open the app and click the **gear icon** in the left sidebar to configure:
-- **Protocol**: OpenAI / OpenAI-compatible (routers like OpenRouter) / Anthropic / Gemini
-- **Base URL**: auto-filled + locked for OpenAI/Gemini/Anthropic; editable for routers
-- **Model**: e.g. `anthropic/claude-sonnet-4-6`
-- **API key**: stored server-side per guest (Redis TTL)
-- **Trail language**: presets (English, Simplified Chinese, Traditional Chinese, Japanese, Korean, Spanish, French, German, Portuguese (Brazil), Russian)
+Open `Settings` to configure:
+- Protocol: Anthropic / OpenAI / OpenAI-compatible / Gemini
+- Model: e.g. `claude-sonnet-4-6`
+- API key: stored server-side per guest (Redis TTL)
 
-## URLs
+## Make Commands
 
-- Frontend: `http://localhost:5173`
-- Backend: `http://localhost:8000` (health: `GET /health`)
-
-## Testing
-
-```bash
-make test-backend
+```
+make setup       Build, start, and migrate (one-shot)
+make up          Start all services
+make down        Stop all services
+make migrate     Run Alembic migrations
+make reset-db    Drop and recreate database
+make logs        Tail all service logs
+make test-backend  Run backend tests
 ```

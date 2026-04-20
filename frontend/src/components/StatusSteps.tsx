@@ -105,7 +105,7 @@ export function StatusBadge({ statusText, mode }: { statusText: string; mode?: s
   const label = stepLabels[stepKey] ?? stepLabels["received"];
 
   return (
-    <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] bg-blue-500/20 text-blue-300 border border-blue-500/20 whitespace-nowrap">
+    <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] bg-accent-50 text-accent-700 border border-accent-200 whitespace-nowrap">
       <Loader2 className="w-3 h-3 flex-shrink-0 animate-spin" />
       <span>{label}</span>
     </div>
@@ -143,14 +143,14 @@ export function DoneMarker({ mode, answerJson }: { mode?: string; answerJson?: A
 
   return (
     <div
-      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 transition-all duration-700"
+      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 transition-all duration-700"
       style={{
         opacity: fading ? 0 : 1,
         transform: fading ? "translateY(-4px)" : "translateY(0)",
       }}
     >
-      <CheckCircle className="w-4 h-4 flex-shrink-0 text-emerald-400" />
-      <span className="text-sm font-medium text-emerald-300">{label}</span>
+      <CheckCircle className="w-4 h-4 flex-shrink-0 text-emerald-600" />
+      <span className="text-sm font-medium text-emerald-700">{label}</span>
     </div>
   );
 }

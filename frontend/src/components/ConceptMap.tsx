@@ -1,20 +1,19 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ArrowLeft,
   BookOpen,
   ExternalLink,
   Info,
-  ListChecks,
   Loader2,
-  Map,
+  Maximize2,
   RefreshCw,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import clsx from "clsx";
 
 import { api } from "@/api/client";
 import type { ConceptEdge, ConceptMap, ConceptNode, ConceptNodeType } from "@/types";
 
-type WorkspaceTab = "answer" | "trail" | "concepts";
 type ViewMode = "overview" | "focus" | "full";
 
 const TYPE_COLOR: Record<ConceptNodeType, string> = {
@@ -29,14 +28,14 @@ const TYPE_COLOR: Record<ConceptNodeType, string> = {
 };
 
 const TYPE_BADGE: Record<ConceptNodeType, string> = {
-  Problem: "bg-red-500/15 text-red-300 border-red-500/30",
-  Method: "bg-blue-500/15 text-blue-300 border-blue-500/30",
-  Component: "bg-indigo-500/15 text-indigo-300 border-indigo-500/30",
-  Baseline: "bg-slate-500/15 text-slate-300 border-slate-500/30",
-  Dataset: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-  Metric: "bg-amber-500/15 text-amber-300 border-amber-500/30",
-  Finding: "bg-violet-500/15 text-violet-300 border-violet-500/30",
-  Limitation: "bg-orange-500/15 text-orange-300 border-orange-500/30",
+  Problem: "bg-red-50 text-red-700 border-red-200",
+  Method: "bg-blue-50 text-blue-700 border-blue-200",
+  Component: "bg-indigo-50 text-indigo-700 border-indigo-200",
+  Baseline: "bg-slate-50 text-slate-700 border-slate-200",
+  Dataset: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  Metric: "bg-amber-50 text-amber-700 border-amber-200",
+  Finding: "bg-violet-50 text-violet-700 border-violet-200",
+  Limitation: "bg-orange-50 text-orange-700 border-orange-200",
 };
 
 const TYPE_PRIORITY: Record<ConceptNodeType, number> = {
@@ -467,12 +466,12 @@ function DetailCard({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="shrink-0 border-b border-white/5 px-4 py-4">
-        <h3 className="text-sm font-semibold text-gray-100 leading-snug">{node.label}</h3>
+      <div className="shrink-0 border-b border-surface-200 px-4 py-4">
+        <h3 className="text-sm font-semibold text-surface-800 leading-snug">{node.label}</h3>
         <span
           className={clsx(
             "mt-2 inline-flex rounded-md border px-2 py-1 text-[10px] font-medium",
-            TYPE_BADGE[node.type] ?? "bg-white/5 text-gray-400 border-white/10"
+            TYPE_BADGE[node.type] ?? "bg-surface-100 text-surface-500 border-surface-200"
           )}
         >
           {node.type}
@@ -482,26 +481,26 @@ function DetailCard({
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4">
         {sentence && (
           <div>
-            <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-gray-500">
+            <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-surface-500">
               Summary
             </p>
-            <p className="mt-2 text-xs leading-relaxed text-gray-300">{sentence}</p>
+            <p className="mt-2 text-xs leading-relaxed text-surface-600">{sentence}</p>
           </div>
         )}
 
         {node.evidence.length > 0 && (
           <div>
-            <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-gray-500">
+            <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-surface-500">
               Evidence
             </p>
-            <blockquote className="mt-2 border-l-2 border-white/10 pl-3 text-xs italic leading-relaxed text-gray-400">
+            <blockquote className="mt-2 border-l-2 border-surface-300 pl-3 text-xs italic leading-relaxed text-surface-500">
               "{node.evidence[0]}"
             </blockquote>
           </div>
         )}
 
         <div>
-          <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-gray-500">
+          <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-surface-500">
             Direct relations
           </p>
           <div className="mt-2 space-y-1.5">
@@ -516,27 +515,27 @@ function DetailCard({
                   <button
                     key={`${edge.relation}-${otherId}-${index}`}
                     onClick={() => onSelectNode(otherId)}
-                    className="flex w-full items-center gap-2 rounded-lg border border-white/5 bg-white/[0.03] px-2.5 py-2 text-left transition-colors hover:bg-white/[0.06]"
+                    className="flex w-full items-center gap-2 rounded-lg border border-surface-200 bg-surface-50 px-2.5 py-2 text-left transition-colors hover:bg-surface-100"
                     title={other.label}
                   >
-                    <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] text-gray-400">
+                    <span className="rounded-full border border-surface-200 bg-surface-100 px-2 py-0.5 text-[10px] text-surface-500">
                       {formatRelationChip(edge.relation)}
                     </span>
-                    <span className="truncate text-xs text-gray-200">{other.label}</span>
+                    <span className="truncate text-xs text-surface-700">{other.label}</span>
                   </button>
                 );
               })
             ) : (
-              <p className="text-xs text-gray-500">No direct relations recorded.</p>
+              <p className="text-xs text-surface-400">No direct relations recorded.</p>
             )}
           </div>
         </div>
       </div>
 
-      <div className="shrink-0 border-t border-white/5 px-4 py-4 space-y-2 bg-surface-900/95">
+      <div className="shrink-0 border-t border-surface-200 px-4 py-4 space-y-2 bg-white">
         <button
           onClick={() => onExplain(node.label)}
-          className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-accent-600/30 bg-accent-600/20 px-3 py-2 text-xs font-medium text-accent-300 transition-colors hover:bg-accent-600/30"
+          className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-accent-200 bg-accent-50 px-3 py-2 text-xs font-medium text-accent-700 transition-colors hover:bg-accent-100"
         >
           <BookOpen className="h-3.5 w-3.5" />
           Explain this concept
@@ -544,7 +543,7 @@ function DetailCard({
         {node.page != null && (
           <button
             onClick={() => onShowInPaper(node.page!)}
-            className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-gray-300 transition-colors hover:bg-white/10"
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-xs font-medium text-surface-600 transition-colors hover:bg-surface-100"
           >
             <ExternalLink className="h-3.5 w-3.5" />
             Show in paper (p.{node.page})
@@ -558,8 +557,6 @@ function DetailCard({
 interface Props {
   paperId: string;
   paperTitle: string;
-  activeTab: WorkspaceTab;
-  onTabChange: (tab: WorkspaceTab) => void;
   onExplainConcept: (label: string) => void;
   onShowInPaper: (page: number) => void;
 }
@@ -567,8 +564,6 @@ interface Props {
 export function ConceptMap({
   paperId,
   paperTitle,
-  activeTab,
-  onTabChange,
   onExplainConcept,
   onShowInPaper,
 }: Props) {
@@ -799,16 +794,16 @@ export function ConceptMap({
               label: "data(relationLabel)",
               "font-size": 9,
               "font-weight": 600,
-              color: "#dbeafe",
+              color: "#1e40af",
               "text-rotation": "none",
               "text-margin-y": -10,
-              "text-background-color": "#0f172a",
-              "text-background-opacity": 0.96,
+              "text-background-color": "#eff6ff",
+              "text-background-opacity": 0.92,
               "text-background-shape": "roundrectangle",
               "text-background-padding": "4px",
               "text-border-width": 1,
-              "text-border-color": "#1e3a8a",
-              "text-border-opacity": 0.35,
+              "text-border-color": "#93c5fd",
+              "text-border-opacity": 0.6,
             },
           },
           {
@@ -825,7 +820,7 @@ export function ConceptMap({
         userZoomingEnabled: true,
         userPanningEnabled: true,
         boxSelectionEnabled: false,
-        wheelSensitivity: 0.2,
+        wheelSensitivity: 0.6,
       });
 
       cyRef.current = cy;
@@ -931,7 +926,7 @@ export function ConceptMap({
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center gap-2 text-sm text-gray-500">
+      <div className="flex h-full items-center justify-center gap-2 text-sm text-surface-500">
         <Loader2 className="h-4 w-4 animate-spin" />
         Loading concept map…
       </div>
@@ -949,24 +944,16 @@ export function ConceptMap({
   if (!conceptMap?.generated || conceptMap.nodes.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
-        <button
-          onClick={() => onTabChange("answer")}
-          className="mb-2 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-gray-300 transition-colors hover:bg-white/10"
-          title="Back to chat"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Back to chat
-        </button>
-        <p className="text-sm text-gray-300">
+        <p className="text-sm text-surface-600">
           {autoPolling ? "Building concept map…" : "No concept map for this paper yet."}
         </p>
-        <p className="max-w-xs text-xs text-gray-600">
+        <p className="max-w-xs text-xs text-surface-400">
           {autoPolling
             ? "You can start chatting now; this will appear automatically when ready."
             : "If this is an older paper or generation failed, you can regenerate."}
         </p>
         {autoPolling && (
-          <div className="flex items-center gap-2 text-xs text-gray-500">
+          <div className="flex items-center gap-2 text-xs text-surface-500">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             Waiting for background job…
           </div>
@@ -975,7 +962,7 @@ export function ConceptMap({
           <button
             onClick={handleRegenerate}
             disabled={regenerating}
-            className="flex items-center gap-2 rounded-lg border border-accent-600/30 bg-accent-600/20 px-4 py-2 text-xs font-medium text-accent-300 transition-colors hover:bg-accent-600/30 disabled:opacity-50"
+            className="flex items-center gap-2 rounded-lg border border-accent-200 bg-accent-50 px-4 py-2 text-xs font-medium text-accent-700 transition-colors hover:bg-accent-100 disabled:opacity-50"
           >
             {regenerating ? (
               <>
@@ -1000,61 +987,53 @@ export function ConceptMap({
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex shrink-0 items-center gap-3 border-b border-white/5 px-4 py-2">
+      <div className="flex shrink-0 items-center gap-3 border-b border-surface-200 px-4 py-2">
         <div className="flex min-w-0 flex-[1.1] items-center gap-2">
-          <span className="rounded-full border border-accent-500/20 bg-accent-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-accent-200">
+          <span className="rounded-full border border-accent-200 bg-accent-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-accent-700">
             Concepts
           </span>
-          <h2 className="truncate text-xs font-semibold text-gray-200 sm:text-sm">{paperTitle}</h2>
-        </div>
-
-        <button
-          onClick={() => onTabChange("answer")}
-          className="hidden items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-gray-300 transition-colors hover:bg-white/10 sm:flex"
-          title="Back to chat"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Back
-        </button>
-
-        <div className="flex items-center rounded-xl border border-white/10 bg-white/[0.03] p-1">
-          {(["answer", "trail", "concepts"] as WorkspaceTab[]).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => onTabChange(tab)}
-              className={clsx(
-                "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-                activeTab === tab
-                  ? "bg-white/10 text-gray-100 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]"
-                  : "text-gray-500 hover:bg-white/[0.04] hover:text-gray-300"
-              )}
-            >
-              {tab === "answer" && (
-                <>
-                  <BookOpen className="h-3.5 w-3.5" />
-                  Answer
-                </>
-              )}
-              {tab === "trail" && (
-                <>
-                  <ListChecks className="h-3.5 w-3.5" />
-                  Trail
-                </>
-              )}
-              {tab === "concepts" && (
-                <>
-                  <Map className="h-3.5 w-3.5" />
-                  Concepts
-                </>
-              )}
-            </button>
-          ))}
+          <h2 className="truncate text-xs font-semibold text-surface-700 sm:text-sm">{paperTitle}</h2>
         </div>
 
         <div className="ml-auto flex items-center gap-2">
           <button
+            onClick={() => {
+              const cy = cyRef.current;
+              if (!cy) return;
+              const center = { x: cy.width() / 2, y: cy.height() / 2 };
+              cy.zoom({ level: cy.zoom() * 1.3, renderedPosition: center });
+            }}
+            className="rounded-lg border border-surface-200 bg-surface-50 p-1.5 text-surface-600 transition-colors hover:bg-surface-100"
+            title="Zoom in"
+          >
+            <ZoomIn className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => {
+              const cy = cyRef.current;
+              if (!cy) return;
+              const center = { x: cy.width() / 2, y: cy.height() / 2 };
+              cy.zoom({ level: cy.zoom() / 1.3, renderedPosition: center });
+            }}
+            className="rounded-lg border border-surface-200 bg-surface-50 p-1.5 text-surface-600 transition-colors hover:bg-surface-100"
+            title="Zoom out"
+          >
+            <ZoomOut className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => {
+              const cy = cyRef.current;
+              if (!cy) return;
+              cy.fit(undefined, 48);
+            }}
+            className="rounded-lg border border-surface-200 bg-surface-50 p-1.5 text-surface-600 transition-colors hover:bg-surface-100"
+            title="Fit to view"
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+          <button
             onClick={handleResetView}
-            className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-gray-300 transition-colors hover:bg-white/[0.06]"
+            className="rounded-lg border border-surface-200 bg-surface-50 px-3 py-1.5 text-xs font-medium text-surface-600 transition-colors hover:bg-surface-100"
           >
             Reset view
           </button>
@@ -1063,8 +1042,8 @@ export function ConceptMap({
             className={clsx(
               "rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
               viewMode === "full"
-                ? "border-accent-500/40 bg-accent-500/15 text-accent-200"
-                : "border-white/10 bg-white/[0.03] text-gray-300 hover:bg-white/[0.06]"
+                ? "border-accent-200 bg-accent-50 text-accent-700"
+                : "border-surface-200 bg-surface-50 text-surface-600 hover:bg-surface-100"
             )}
           >
             Full graph
@@ -1073,16 +1052,16 @@ export function ConceptMap({
           <div ref={legendRef} className="relative">
             <button
               onClick={() => setLegendOpen((open) => !open)}
-              className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-gray-300 transition-colors hover:bg-white/[0.06]"
+              className="flex items-center gap-1.5 rounded-lg border border-surface-200 bg-surface-50 px-3 py-1.5 text-xs font-medium text-surface-600 transition-colors hover:bg-surface-100"
             >
               <Info className="h-3.5 w-3.5" />
               Legend
             </button>
             {legendOpen && (
-              <div className="absolute right-0 top-10 z-30 w-52 rounded-xl border border-white/10 bg-surface-900/95 p-3 shadow-2xl backdrop-blur">
+              <div className="absolute right-0 top-10 z-30 w-52 rounded-xl border border-surface-200 bg-white p-3 shadow-lg">
                 <div className="space-y-2">
                   {legendTypes.map((type) => (
-                    <div key={type} className="flex items-center gap-2 text-xs text-gray-300">
+                    <div key={type} className="flex items-center gap-2 text-xs text-surface-600">
                       <span
                         className="inline-block h-2.5 w-2.5 rounded-sm"
                         style={{ backgroundColor: TYPE_COLOR[type] }}
@@ -1101,21 +1080,21 @@ export function ConceptMap({
         <div className="relative min-w-0 flex-1">
           <div ref={containerRef} className="h-full w-full" />
 
-          <div className="pointer-events-none absolute bottom-3 left-3 rounded-full border border-white/10 bg-surface-900/80 px-3 py-1 text-[10px] text-gray-400 backdrop-blur">
+          <div className="pointer-events-none absolute bottom-3 left-3 rounded-full border border-surface-200 bg-white/90 px-3 py-1 text-[10px] text-surface-500 backdrop-blur">
             {viewMode === "overview" && "Overview"}
             {viewMode === "focus" && "Focus"}
             {viewMode === "full" && "Full graph"} · {conceptMap.nodes.length} concepts · {conceptMap.edges.length} relations
           </div>
 
           {viewMode === "full" && (
-            <div className="pointer-events-none absolute bottom-3 right-3 rounded-full border border-white/10 bg-surface-900/80 px-3 py-1 text-[10px] text-gray-500 backdrop-blur">
+            <div className="pointer-events-none absolute bottom-3 right-3 rounded-full border border-surface-200 bg-white/90 px-3 py-1 text-[10px] text-surface-400 backdrop-blur">
               Click any node to jump back into a readable local focus
             </div>
           )}
         </div>
 
         <aside
-          className="flex h-full flex-none flex-col border-l border-white/5 bg-surface-900/55"
+          className="flex h-full flex-none flex-col border-l border-surface-200 bg-white"
           style={{ width: DETAIL_PANEL_WIDTH }}
         >
           {selectedNode ? (
@@ -1128,7 +1107,7 @@ export function ConceptMap({
               onSelectNode={handleSelectNode}
             />
           ) : (
-            <div className="flex h-full items-center justify-center px-6 text-center text-sm text-gray-500">
+            <div className="flex h-full items-center justify-center px-6 text-center text-sm text-surface-400">
               Select a concept to inspect its role in the paper.
             </div>
           )}

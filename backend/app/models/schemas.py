@@ -6,6 +6,27 @@ from pydantic import BaseModel, Field
 
 # ── Paper ─────────────────────────────────────────────────────────────────
 
+class WorkspaceCreate(BaseModel):
+    title: str = Field(default="Untitled Workspace", max_length=512)
+    objective: str | None = None
+
+
+class WorkspaceUpdate(BaseModel):
+    title: str | None = Field(default=None, max_length=512)
+    objective: str | None = None
+
+
+class WorkspaceOut(BaseModel):
+    id: str
+    title: str
+    objective: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class PaperOut(BaseModel):
     id: str
     filename: str
@@ -94,7 +115,8 @@ class ConceptMapOut(BaseModel):
 class SessionOut(BaseModel):
     id: str
     guest_id: str | None = None
-    paper_id: str
+    paper_id: str | None = None
+    workspace_id: str | None = None
     created_at: datetime
     last_active: datetime
 
