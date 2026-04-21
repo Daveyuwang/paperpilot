@@ -252,17 +252,19 @@ export default function App() {
             {/* Workspace header */}
             <WorkspaceHeader />
 
-            {/* Body: source rail + page content */}
+            {/* Body: source rail (reader only) + page content */}
             <div className="flex flex-1 min-h-0 overflow-hidden">
-              {/* Source Rail: upload + paper list */}
-              <aside className="flex-shrink-0 w-48 flex flex-col border-r border-surface-200 bg-surface-50 overflow-hidden">
-                <div className="px-3 py-3 border-b border-surface-200">
-                  <UploadZone />
-                </div>
-                <div className="flex-1 overflow-y-auto px-2 py-2">
-                  <PaperList onSelect={handleSelectPaper} />
-                </div>
-              </aside>
+              {/* Source Rail: upload + paper list — only visible in reader view */}
+              {selectedNav === "reader" && (
+                <aside className="flex-shrink-0 w-48 flex flex-col border-r border-surface-200 bg-surface-50 overflow-hidden">
+                  <div className="px-3 py-3 border-b border-surface-200">
+                    <UploadZone />
+                  </div>
+                  <div className="flex-1 overflow-y-auto px-2 py-2">
+                    <PaperList onSelect={handleSelectPaper} />
+                  </div>
+                </aside>
+              )}
 
               {/* Page content — single page per nav item */}
               <main className="flex-1 min-w-0 overflow-hidden">

@@ -1,4 +1,4 @@
-import { FileText, MessageSquare } from "lucide-react";
+import { FileText, MessageSquare, ArrowUpRight } from "lucide-react";
 import type { Citation } from "@/types";
 import { usePaperStore } from "@/store/paperStore";
 import { useWorkspaceStore } from "@/store/workspaceStore";
@@ -59,9 +59,11 @@ export function ReaderPage({
           <span className="text-xs text-surface-500 truncate flex-1">{activePaper.title ?? activePaper.filename}</span>
           <button
             onClick={() => setSelectedNav("console")}
-            className="text-[10px] text-surface-400 hover:text-surface-600 transition-colors flex-shrink-0"
+            className="inline-flex items-center gap-1 text-[10px] text-surface-400 hover:text-accent-600 transition-colors flex-shrink-0"
+            title="Switch to workspace console (keeps paper context)"
           >
-            Open in Console
+            <ArrowUpRight className="w-2.5 h-2.5" />
+            Console
           </button>
         </div>
         <UpNextCard onAsk={onTrailAsk} />
