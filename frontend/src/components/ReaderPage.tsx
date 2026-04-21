@@ -4,7 +4,6 @@ import { usePaperStore } from "@/store/paperStore";
 import { useWorkspaceStore } from "@/store/workspaceStore";
 import { ViewerLane } from "./ViewerLane";
 import { QAPanel } from "./QAPanel";
-import { UpNextCard } from "./UpNextCard";
 
 type QueuedQuestion = { id?: string; question: string; nonce: number } | null;
 
@@ -66,7 +65,6 @@ export function ReaderPage({
             Console
           </button>
         </div>
-        <UpNextCard onAsk={onTrailAsk} />
         <div className="flex-1 min-h-0">
           <QAPanel
             onHighlight={onHighlight}
