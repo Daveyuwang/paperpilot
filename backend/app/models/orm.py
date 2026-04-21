@@ -40,7 +40,7 @@ class Paper(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     guest_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    workspace_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("workspaces.id", ondelete="SET NULL"), nullable=True, index=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True, index=True)
     filename: Mapped[str] = mapped_column(String(512))
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     abstract: Mapped[str | None] = mapped_column(Text, nullable=True)

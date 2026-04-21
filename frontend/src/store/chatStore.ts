@@ -46,6 +46,7 @@ interface ChatState {
   clearSession: (sessionId: string) => void;
   setConsoleSessionId: (workspaceId: string, sessionId: string) => void;
   getConsoleSessionId: (workspaceId: string) => string | null;
+  clearWorkspace: (workspaceId: string) => void;
   initSession: () => void;
   addUserMessage: (text: string) => string;
   startAssistantMessage: () => string;
@@ -156,6 +157,17 @@ export const useChatStore = create<ChatState>()(
       getConsoleSessionId: (workspaceId) => {
         return get().consoleSessionIdByWorkspace[workspaceId] ?? null;
       },
+
+      clearWorkspace: (workspaceId) =>
+        set((s) => {
+          const { [workspaceId]: removedSessionId, ...restConsole } = s.consoleSessionIdByWorkspace;
+          const bySession = { ...s.messages_by_session };
+          if (removedSessionId) delete bySession[removedSessionId];
+          return {
+            consoleSessionIdByWorkspace: restConsole,
+            messages_by_session: bySession,
+          };
+        }),
 
       initSession: () =>
         set({

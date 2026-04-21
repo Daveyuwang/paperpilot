@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback } from "react";
-import { Send, Loader2, ArrowRight, Square, RotateCcw, MessageSquare, Search, GitCompare, PenTool, Sparkles, Pencil, X, PanelRight } from "lucide-react";
+import { Send, Loader2, ArrowRight, Square, RotateCcw, MessageSquare, Search, GitCompare, PenTool, Sparkles, Pencil, X } from "lucide-react";
 import clsx from "clsx";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useChatStore } from "@/store/chatStore";
@@ -496,7 +496,7 @@ export function QAPanel({
                   <div className="group relative">
                     <div className={clsx(
                       "bg-accent-100 rounded-2xl rounded-tr-sm px-4 py-3 text-sm text-accent-700",
-                      forceConsole ? "max-w-[90%]" : "max-w-[80%]"
+                      "max-w-full"
                     )}>
                       {msg.content}
                     </div>
@@ -652,7 +652,6 @@ export function QAPanel({
       {/* ── Composer ─────────────────────────────────────────────────────── */}
       <div className="flex-shrink-0 px-4 py-3 bg-white border-t border-surface-100">
         <div className={clsx(colClass)}>
-          {forceConsole && <ConsolePanelToggle />}
           <div className={clsx(
             "flex items-end gap-2 rounded-2xl border border-surface-200 bg-surface-50 px-3 py-2",
             "focus-within:border-accent-400 focus-within:ring-1 focus-within:ring-accent-400 transition-all"
@@ -768,23 +767,6 @@ function shouldShowSlowHint(statusText: string): boolean {
   return true;
 }
 
-// ── Console panel toggle (above composer) ──────────────────────────────────
-
-function ConsolePanelToggle() {
-  const { consolePanelOpen, setConsolePanelOpen } = useWorkspaceStore();
-  if (consolePanelOpen) return null;
-  return (
-    <div className="flex justify-end mb-1.5">
-      <button
-        onClick={() => setConsolePanelOpen(true)}
-        className="inline-flex items-center gap-1.5 text-[11px] text-surface-500 hover:text-surface-700 px-2 py-1 rounded-md hover:bg-surface-100 transition-colors"
-      >
-        <PanelRight className="w-3 h-3" />
-        Sources & Deliverables
-      </button>
-    </div>
-  );
-}
 
 // ── Editable user message (after stop/discard) ─────────────────────────────
 

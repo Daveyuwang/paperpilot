@@ -72,7 +72,15 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
         return ws;
       },
 
-      deleteWorkspace: (id) =>
+      deleteWorkspace: (id) => {
+        // Clean up related store data
+        import("@/store/deliverableStore").then((m) => m.useDeliverableStore.getState().clearWorkspace(id));
+        import("@/store/sourceStore").then((m) => m.useSourceStore.getState().clearWorkspace(id));
+        import("@/store/chatStore").then((m) => m.useChatStore.getState().clearWorkspace(id));
+        import("@/store/paperStore").then((m) => m.clearWorkspaceStorage(id));
+        import("@/store/deepResearchStore").then((m) => m.useDeepResearchStore.getState().reset());
+        import("@/store/proposalPlanStore").then((m) => m.useProposalPlanStore.getState().reset());
+
         set((s) => {
           const { [id]: _, ...rest } = s.workspaces;
           const patch: Partial<WorkspaceStore> = { workspaces: rest };
@@ -81,7 +89,8 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             patch.appView = "home";
           }
           return patch as any;
-        }),
+        });
+      },
 
       renameWorkspace: (id, title) =>
         set((s) => {

@@ -24,6 +24,11 @@ async def _invoke_plan(structured_llm, messages):
 
 
 async def plan_node(state: DeepResearchState) -> dict:
+    # If sub_questions already provided (from pre_plan), skip generation
+    if state.get("sub_questions"):
+        logger.info("plan_node_skipped", reason="pre_plan provided", num_sub_questions=len(state["sub_questions"]))
+        return {}
+
     topic = state["topic"]
     depth = state.get("depth", "standard")
     user_sources = state.get("user_sources", [])

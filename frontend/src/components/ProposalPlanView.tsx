@@ -1,22 +1,23 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   FileText, Play, RotateCcw, ExternalLink,
-  BookOpen, FlaskConical, Check, ChevronRight,
+  FlaskConical, Check,
 } from "lucide-react";
 import clsx from "clsx";
-import { useProposalPlanStore, type PPStatus } from "@/store/proposalPlanStore";
+import { useProposalPlanStore } from "@/store/proposalPlanStore";
 import { useWorkspaceStore } from "@/store/workspaceStore";
 import { useDeliverableStore } from "@/store/deliverableStore";
 import { useSourceStore } from "@/store/sourceStore";
-import { useAgendaStore } from "@/store/agendaStore";
 import { usePaperStore } from "@/store/paperStore";
 import { api } from "@/api/client";
+import { useProposalPlanRun } from "@/hooks/useProposalPlanRun";
 import { TaskPageShell } from "./shared/TaskPageShell";
 import { WorkflowError } from "./shared/WorkflowError";
 import { VerticalTimeline } from "./DeepResearchProgress/VerticalTimeline";
 import { StatGrid } from "./shared/StatGrid";
 import { ClarificationPanel } from "./shared/ClarificationPanel";
-import type { ProposalPlanMode, ProposalPlanRunResult, ClarificationQuestion, DeliverableType } from "@/types";
+import { ConversationalFlow, type GeneratedPlan } from "./shared/ConversationalFlow";
+import type { ProposalPlanMode, ProposalPlanRunResult } from "@/types";
 
 export function ProposalPlanView() {
   const store = useProposalPlanStore();
@@ -26,7 +27,7 @@ export function ProposalPlanView() {
 
   const { status, result, clarificationQuestions, errorMessage } = store;
 
-  const isRunning = !["idle", "needs_clarification", "completed", "blocked", "failed", "interrupted"].includes(status);
+  const isRunning = !["idle", "generating_plan", "plan_ready", "needs_clarification", "completed", "blocked", "failed", "interrupted"].includes(status);
 
   return (
     <TaskPageShell
@@ -34,6 +35,9 @@ export function ProposalPlanView() {
       title="Proposal / Plan"
     >
       {status === "idle" && <InputForm workspaceId={wid} />}
+      {(status === "generating_plan" || status === "plan_ready") && (
+        <PPPlanStep workspaceId={wid} />
+      )}
       {status === "needs_clarification" && (
         <ClarificationPanel
           questions={clarificationQuestions}
@@ -143,245 +147,17 @@ function PPInterruptedState() {
   );
 }
 
-/* ── InputForm ────────────────────────────────────────────────────────── */
+/* ── InputForm (simplified) ──────────────────────────────────────────── */
 
 function InputForm({ workspaceId }: { workspaceId: string }) {
-  const { input, setInput } = useProposalPlanStore();
-  const { getActiveWorkspace, setActiveViewerTab, setSelectedNav } = useWorkspaceStore();
-  const wksp = getActiveWorkspace();
-  const deliverableStore = useDeliverableStore();
-  const { getIncludedSources } = useSourceStore();
-  const { activePaper } = usePaperStore();
-  const agendaStore = useAgendaStore();
-  const allDeliverables = deliverableStore.getDeliverables(workspaceId);
-  const drDeliverables = allDeliverables.filter((d) => d.type === "deep_research");
-  const ppDeliverables = allDeliverables.filter((d) => d.type === input.mode);
-  const sources = getIncludedSources(workspaceId);
-
   const store = useProposalPlanStore();
-
-  const handleRun = useCallback(async () => {
-    store.startRun();
-
-    const wsSources = sources.map((s) => ({
-      id: s.id, title: s.title, authors: s.authors, year: s.year,
-      abstract: s.abstract, provider: s.provider, paper_id: s.paper_id, label: s.label,
-    }));
-
-    const drContext = input.useDeepResearchContext
-      ? drDeliverables
-          .filter((d) => input.deepResearchDeliverableIds.includes(d.id))
-          .map((d) => ({
-            deliverable_id: d.id,
-            title: d.title,
-            sections: d.sections.map((s) => ({
-              id: s.id, title: s.title, content: s.content, order: s.order, linkedSourceIds: s.linkedSourceIds,
-            })),
-          }))
-      : [];
-
-    let existingSections: { id: string; title: string; content: string; order: number; linkedSourceIds: string[] }[] = [];
-    if (input.targetDeliverableId) {
-      const target = allDeliverables.find((d) => d.id === input.targetDeliverableId);
-      if (target) {
-        existingSections = target.sections.map((s) => ({
-          id: s.id, title: s.title, content: s.content, order: s.order, linkedSourceIds: s.linkedSourceIds,
-        }));
-      }
-    }
-
-    const payload = {
-      input: {
-        mode: input.mode,
-        topic: input.topic,
-        problem_statement: input.problemStatement || null,
-        focus: input.focus || null,
-        target_deliverable_id: input.targetDeliverableId,
-        use_workspace_sources: input.useWorkspaceSources,
-        use_deep_research_context: input.useDeepResearchContext,
-        deep_research_deliverable_ids: input.deepResearchDeliverableIds,
-        notes: input.notes || null,
-        motivation: input.motivation || null,
-        proposed_idea: input.proposedIdea || null,
-        evaluation_direction: input.evaluationDirection || null,
-        constraints: input.constraints || null,
-        planning_horizon: input.planningHorizon || null,
-        intended_deliverables: input.intendedDeliverables || null,
-        risks: input.risks || null,
-        milestone_notes: input.milestoneNotes || null,
-      },
-      workspace_id: workspaceId,
-      workspace_sources: wsSources,
-      existing_sections: existingSections.length > 0 ? existingSections : undefined,
-      deep_research_context: drContext.length > 0 ? drContext : undefined,
-      active_paper_id: activePaper?.id ?? null,
-    };
-
-    try {
-      await api.runProposalPlanStream(payload, (event) => {
-        const s = useProposalPlanStore.getState();
-        const type = event.type as string;
-
-        if (type === "stage") {
-          const stage = event.stage as string;
-          const msg = event.message as string | undefined;
-          s.setStatus(stage as PPStatus);
-          if (msg) s.setStageMessage(msg);
-          s.pushStage(stage, msg || stage);
-          // v2 timeline
-          if (stage === "validating" || stage === "selecting_context") {
-            s.setMacroStageStatus("context", "in_progress");
-            s.setCurrentActivity(msg || "Preparing context...");
-          } else if (stage === "generating_outline") {
-            s.setMacroStageStatus("context", "completed");
-            s.setMacroStageStatus("draft", "in_progress");
-            s.setCurrentActivity(msg || "Generating outline...");
-          } else if (stage === "drafting") {
-            s.setCurrentActivity(msg || "Drafting sections...");
-          } else if (stage === "updating_agenda") {
-            s.setMacroStageStatus("draft", "completed");
-            s.setMacroStageStatus("finalize", "in_progress");
-            s.setCurrentActivity(msg || "Analyzing gaps...");
-          }
-        } else if (type === "activity") {
-          const actType = (event.activity_type as string) || "thinking";
-          const label = (event.label as string) || "";
-          if (label) {
-            s.pushActivity({ type: actType as any, label, status: "active" });
-            s.setCurrentActivity(label);
-          }
-        } else if (type === "progress") {
-          if (event.sources_selected !== undefined) s.setSourcesSelected(event.sources_selected as number);
-        } else if (type === "sections_outline") {
-          const titles = event.titles as string[];
-          if (titles) {
-            s.initSectionsProgress(titles);
-            s.initSectionsV2(titles);
-          }
-        } else if (type === "tailored_outline") {
-          const genTitle = event.generated_title as string | undefined;
-          const sections = event.sections as string[] | undefined;
-          if (genTitle) s.setGeneratedTitle(genTitle);
-          if (sections) {
-            s.initSectionsProgress(sections);
-            s.initSectionsV2(sections);
-          }
-        } else if (type === "section_start") {
-          const idx = event.index as number;
-          const title = event.title as string | undefined;
-          s.setSectionStatus(idx, "drafting");
-          s.setSectionV2Status(idx, "drafting");
-          if (title) s.setCurrentActivity(`Drafting: ${title}`);
-        } else if (type === "section_complete") {
-          const idx = event.index as number;
-          const skipped = event.skipped as boolean;
-          if (skipped) {
-            s.setSectionStatus(idx, "skipped");
-            s.setSectionV2Status(idx, "done");
-          } else {
-            const preview = event.preview as string | undefined;
-            s.setSectionStatus(idx, "done", preview);
-            s.setSectionV2Status(idx, "done");
-          }
-        } else if (type === "result") {
-          const status = event.status as string;
-
-          if (status === "needs_clarification") {
-            const questions = event.clarification_questions as ClarificationQuestion[];
-            s.setClarification(questions);
-            return;
-          }
-          if (status === "failed") {
-            s.setFailed((event.message as string) ?? "Run failed");
-            // Mark current in_progress stage as failed
-            for (const ms of s.macroStages) {
-              if (ms.status === "in_progress") {
-                s.setMacroStageStatus(ms.key, "failed");
-                break;
-              }
-            }
-            s.setCurrentActivity(null);
-            return;
-          }
-          if (status === "blocked") {
-            s.setBlocked((event.message as string) ?? "Blocked");
-            s.setCurrentActivity(null);
-            return;
-          }
-
-          const res = (event.data ?? event) as ProposalPlanRunResult;
-
-          // Create or find deliverable
-          const delType: DeliverableType = input.mode === "proposal" ? "proposal" : "research_plan";
-          let deliverable;
-          if (input.targetDeliverableId) {
-            deliverable = allDeliverables.find((d) => d.id === input.targetDeliverableId) ?? null;
-          }
-          if (!deliverable) {
-            const title = res.generated_title || input.topic;
-            deliverable = deliverableStore.createDeliverable(workspaceId, delType, title);
-          } else if (res.generated_title) {
-            deliverableStore.renameDeliverable(workspaceId, deliverable.id, res.generated_title);
-          }
-
-          if (deliverable) {
-            s.setCreatedDeliverableId(deliverable.id);
-            if (res.section_updates) {
-              for (const update of res.section_updates) {
-                if (!update.generated_content.trim()) continue;
-                const targetSection = update.section_id.startsWith("new-")
-                  ? deliverable.sections[parseInt(update.section_id.replace("new-", ""), 10)]
-                  : deliverable.sections.find((sec) => sec.id === update.section_id);
-                if (!targetSection) continue;
-                if (targetSection.content.trim() && update.mode === "fill_empty") continue;
-                deliverableStore.applyAIContent(
-                  workspaceId, deliverable.id, targetSection.id,
-                  update.generated_content, "draft", update.source_ids_used,
-                );
-              }
-            }
-          }
-
-          // Add follow-up agenda items
-          if (res.follow_up_items) {
-            for (const item of res.follow_up_items) {
-              agendaStore.addSystemFollowup(
-                activePaper?.id ?? null,
-                item.title,
-                item.description ?? undefined,
-                item.category ?? undefined,
-                item.priority,
-              );
-            }
-          }
-
-          s.setResult(res);
-          s.setMacroStageStatus("finalize", "completed");
-          s.setCurrentActivity(null);
-
-          // Auto-navigate to deliverable
-          const finalDelId = s.createdDeliverableId ?? deliverable?.id;
-          if (finalDelId) {
-            deliverableStore.setActiveDeliverable(workspaceId, finalDelId);
-            setActiveViewerTab("deliverable");
-            setSelectedNav("reader");
-          }
-        }
-      });
-
-      // Fallback if stream ended without terminal event
-      const finalStatus = useProposalPlanStore.getState().status;
-      if (!["completed", "failed", "blocked", "needs_clarification"].includes(finalStatus)) {
-        store.setFailed("Stream ended unexpectedly. Please try again.");
-      }
-    } catch (err: any) {
-      store.setFailed(err?.message ?? "Unexpected error.");
-    }
-  }, [store, input, sources, drDeliverables, allDeliverables, workspaceId, activePaper?.id, deliverableStore, agendaStore, setActiveViewerTab, setSelectedNav]);
+  const { input, setInput } = store;
+  const runStream = useProposalPlanRun(workspaceId);
+  const { getIncludedSources } = useSourceStore();
+  const sources = getIncludedSources(workspaceId);
 
   return (
     <div className="space-y-4">
-      {/* Mode selector */}
       <div>
         <label className="block text-xs font-medium text-surface-600 mb-1.5">Mode</label>
         <div className="flex gap-2">
@@ -402,241 +178,122 @@ function InputForm({ workspaceId }: { workspaceId: string }) {
         </div>
       </div>
 
-      {/* Topic */}
       <div>
         <label className="block text-xs font-medium text-surface-600 mb-1">
-          Topic <span className="text-red-400">*</span>
+          What do you want to {input.mode === "proposal" ? "propose" : "plan"}?
         </label>
         <textarea
           value={input.topic}
           onChange={(e) => setInput({ topic: e.target.value })}
-          placeholder="What is this about?"
-          className="input-base w-full h-20 resize-none"
+          placeholder={input.mode === "proposal"
+            ? "e.g. A novel approach to few-shot learning using retrieval-augmented generation"
+            : "e.g. 3-month research plan for investigating LLM reasoning capabilities"
+          }
+          rows={3}
+          className="input-base w-full resize-none"
         />
+        {sources.length > 0 && (
+          <p className="text-[11px] text-surface-400 mt-1">
+            {sources.length} workspace source{sources.length !== 1 ? "s" : ""} will be used
+          </p>
+        )}
       </div>
 
-      {/* Shared fields */}
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-xs font-medium text-surface-600 mb-1">Focus (optional)</label>
-          <input
-            value={input.focus}
-            onChange={(e) => setInput({ focus: e.target.value })}
-            placeholder="Specific angle"
-            className="input-base w-full"
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-surface-600 mb-1">Problem statement (optional)</label>
-          <input
-            value={input.problemStatement}
-            onChange={(e) => setInput({ problemStatement: e.target.value })}
-            placeholder="Core problem"
-            className="input-base w-full"
-          />
-        </div>
-      </div>
-
-      {/* Mode-specific fields */}
-      {input.mode === "proposal" && <ProposalFields />}
-      {input.mode === "research_plan" && <ResearchPlanFields />}
-
-      {/* Source toggles */}
-      <div className="space-y-2">
-        <label className="flex items-center gap-2 text-xs text-surface-600 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={input.useWorkspaceSources}
-            onChange={(e) => setInput({ useWorkspaceSources: e.target.checked })}
-            className="rounded border-surface-300 text-accent-600 focus:ring-accent-400"
-          />
-          <BookOpen className="w-3.5 h-3.5" />
-          Use workspace sources
-        </label>
-        <label className="flex items-center gap-2 text-xs text-surface-600 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={input.useDeepResearchContext}
-            onChange={(e) => setInput({ useDeepResearchContext: e.target.checked })}
-            className="rounded border-surface-300 text-accent-600 focus:ring-accent-400"
-          />
-          <FlaskConical className="w-3.5 h-3.5" />
-          Use deep research context
-        </label>
-      </div>
-
-      {/* Deep research deliverable selector */}
-      {input.useDeepResearchContext && (
-        <div>
-          <label className="block text-xs font-medium text-surface-600 mb-1">Deep research deliverables</label>
-          {drDeliverables.length === 0 ? (
-            <p className="text-xs text-surface-400">No deep research deliverables yet. Run Deep Research first.</p>
-          ) : (
-            <div className="space-y-1">
-              {drDeliverables.map((d) => (
-                <label key={d.id} className="flex items-center gap-2 text-xs text-surface-600 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={input.deepResearchDeliverableIds.includes(d.id)}
-                    onChange={(e) => {
-                      const ids = e.target.checked
-                        ? [...input.deepResearchDeliverableIds, d.id]
-                        : input.deepResearchDeliverableIds.filter((id) => id !== d.id);
-                      setInput({ deepResearchDeliverableIds: ids });
-                    }}
-                    className="rounded border-surface-300 text-accent-600 focus:ring-accent-400"
-                  />
-                  {d.title}
-                </label>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Target deliverable */}
-      <div>
-        <label className="block text-xs font-medium text-surface-600 mb-1">Target deliverable</label>
-        <select
-          value={input.targetDeliverableId ?? ""}
-          onChange={(e) => setInput({ targetDeliverableId: e.target.value || null })}
-          className="select-base w-full"
-        >
-          <option value="">Create new</option>
-          {ppDeliverables.map((d) => (
-            <option key={d.id} value={d.id}>{d.title}</option>
-          ))}
-        </select>
-      </div>
-
-      {/* Notes */}
-      <div>
-        <label className="block text-xs font-medium text-surface-600 mb-1">Notes (optional)</label>
-        <textarea
-          value={input.notes}
-          onChange={(e) => setInput({ notes: e.target.value })}
-          placeholder="Any additional context or instructions"
-          className="input-base w-full h-16 resize-none"
-        />
-      </div>
-
-      {/* Actions */}
-      <div className="flex items-center gap-2 pt-2">
+      <div className="flex items-center gap-2">
         <button
-          onClick={handleRun}
+          onClick={() => store.setStatus("generating_plan")}
           disabled={!input.topic.trim()}
           className="btn-primary flex items-center gap-1.5 px-4 py-2 text-xs"
         >
-          <Play className="w-3.5 h-3.5" />
-          Generate Draft
+          <FlaskConical className="w-3.5 h-3.5" />
+          Start
         </button>
-        <button onClick={store.reset} className="btn-ghost flex items-center gap-1.5 px-3 py-2 text-xs">
-          <RotateCcw className="w-3.5 h-3.5" />
-          Reset
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/* ── Proposal-specific fields ─────────────────────────────────────────── */
-
-function ProposalFields() {
-  const { input, setInput } = useProposalPlanStore();
-  return (
-    <div className="space-y-3 pl-3 border-l-2 border-accent-100">
-      <div>
-        <label className="block text-xs font-medium text-surface-600 mb-1">Motivation (optional)</label>
-        <textarea
-          value={input.motivation}
-          onChange={(e) => setInput({ motivation: e.target.value })}
-          placeholder="Why does this matter?"
-          className="input-base w-full h-16 resize-none"
-        />
-      </div>
-      <div>
-        <label className="block text-xs font-medium text-surface-600 mb-1">Proposed idea (optional)</label>
-        <input
-          value={input.proposedIdea}
-          onChange={(e) => setInput({ proposedIdea: e.target.value })}
-          placeholder="Central idea summary"
-          className="input-base w-full"
-        />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-xs font-medium text-surface-600 mb-1">Evaluation direction</label>
-          <input
-            value={input.evaluationDirection}
-            onChange={(e) => setInput({ evaluationDirection: e.target.value })}
-            placeholder="How to evaluate"
-            className="input-base w-full"
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-surface-600 mb-1">Constraints</label>
-          <input
-            value={input.constraints}
-            onChange={(e) => setInput({ constraints: e.target.value })}
-            placeholder="Assumptions or limits"
-            className="input-base w-full"
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ── Research-plan-specific fields ────────────────────────────────────── */
-
-function ResearchPlanFields() {
-  const { input, setInput } = useProposalPlanStore();
-  return (
-    <div className="space-y-3 pl-3 border-l-2 border-accent-100">
-      <div>
-        <label className="block text-xs font-medium text-surface-600 mb-1">Planning horizon</label>
-        <select
-          value={input.planningHorizon}
-          onChange={(e) => setInput({ planningHorizon: e.target.value })}
-          className="select-base w-full"
+        <button
+          onClick={runStream}
+          disabled={!input.topic.trim()}
+          className="btn-ghost flex items-center gap-1.5 px-3 py-2 text-xs text-surface-500"
         >
-          <option value="">Not specified</option>
-          <option value="1_week">1 week</option>
-          <option value="2_weeks">2 weeks</option>
-          <option value="1_month">1 month</option>
-          <option value="custom">Custom</option>
-        </select>
-      </div>
-      <div>
-        <label className="block text-xs font-medium text-surface-600 mb-1">Intended deliverables (optional)</label>
-        <input
-          value={input.intendedDeliverables}
-          onChange={(e) => setInput({ intendedDeliverables: e.target.value })}
-          placeholder="What artifacts to produce"
-          className="input-base w-full"
-        />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-xs font-medium text-surface-600 mb-1">Risks / blockers</label>
-          <input
-            value={input.risks}
-            onChange={(e) => setInput({ risks: e.target.value })}
-            placeholder="Known risks"
-            className="input-base w-full"
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-surface-600 mb-1">Milestone notes</label>
-          <input
-            value={input.milestoneNotes}
-            onChange={(e) => setInput({ milestoneNotes: e.target.value })}
-            placeholder="Key checkpoints"
-            className="input-base w-full"
-          />
-        </div>
+          <Play className="w-3.5 h-3.5" />
+          Run Directly
+        </button>
       </div>
     </div>
+  );
+}
+
+/* ── Plan step (conversational flow) ──────────────────────────────────── */
+
+function PPPlanStep({ workspaceId }: { workspaceId: string }) {
+  const store = useProposalPlanStore();
+  const { status, input, generatedPlan } = store;
+  const { getIncludedSources } = useSourceStore();
+  const { activePaper } = usePaperStore();
+  const runStream = useProposalPlanRun(workspaceId);
+  const generating = useRef(false);
+
+  const handleGeneratePlan = useCallback(async () => {
+    if (generating.current) return;
+    generating.current = true;
+    store.setStatus("generating_plan");
+    try {
+      const sources = getIncludedSources(workspaceId);
+      const wsPayload = sources.map((s) => ({
+        id: s.id, title: s.title, authors: s.authors,
+        year: s.year, abstract: s.abstract, provider: s.provider,
+        paper_id: s.paper_id, label: s.label,
+      }));
+      const res = await api.generatePPPlan({
+        mode: input.mode,
+        topic: input.topic,
+        workspace_id: workspaceId,
+        workspace_sources: wsPayload,
+        active_paper_id: activePaper?.id ?? null,
+      });
+      store.setGeneratedPlan({
+        outlineSections: res.outline_sections,
+        overallApproach: res.overall_approach,
+        recommendedDepth: res.recommended_depth,
+        sourcesStrategy: res.sources_strategy,
+        focusNote: res.focus_note,
+      });
+      store.setStatus("plan_ready");
+    } catch (err: unknown) {
+      store.setFailed(err instanceof Error ? err.message : "Plan generation failed");
+    } finally {
+      generating.current = false;
+    }
+  }, [input.topic, input.mode, workspaceId, activePaper, getIncludedSources, store]);
+
+  useEffect(() => {
+    if (status === "generating_plan" && !generatedPlan && !generating.current) {
+      handleGeneratePlan();
+    }
+  }, [status, generatedPlan, handleGeneratePlan]);
+
+  const handleConfirmPlan = useCallback((_plan: GeneratedPlan) => {
+    runStream();
+  }, [runStream]);
+
+  const plan: GeneratedPlan | null = generatedPlan
+    ? {
+        type: "proposal_plan",
+        outlineSections: generatedPlan.outlineSections,
+        overallApproach: generatedPlan.overallApproach,
+        recommendedDepth: generatedPlan.recommendedDepth,
+        sourcesStrategy: generatedPlan.sourcesStrategy,
+        focusNote: generatedPlan.focusNote,
+      }
+    : null;
+
+  return (
+    <ConversationalFlow
+      topic={input.topic}
+      plan={plan}
+      isGenerating={status === "generating_plan"}
+      onGeneratePlan={handleGeneratePlan}
+      onConfirmPlan={handleConfirmPlan}
+      onCancel={store.reset}
+    />
   );
 }
 
@@ -648,15 +305,18 @@ function ResultSummary({ result, workspaceId, onReset }: {
   onReset: () => void;
 }) {
   const { createdDeliverableId } = useProposalPlanStore();
-  const { setSelectedNav, setActiveViewerTab } = useWorkspaceStore();
-  const { setActiveDeliverable } = useDeliverableStore();
+  const { setSelectedNav, setConsolePanelTab } = useWorkspaceStore();
+  const { setActiveDeliverable, getDeliverables, selectSection } = useDeliverableStore();
 
   const handleOpenDeliverable = () => {
     if (createdDeliverableId) {
       setActiveDeliverable(workspaceId, createdDeliverableId);
+      const del = getDeliverables(workspaceId).find((d) => d.id === createdDeliverableId);
+      const firstSection = del?.sections.sort((a, b) => a.order - b.order)[0];
+      if (firstSection) selectSection(createdDeliverableId, firstSection.id);
     }
-    setSelectedNav("reader");
-    setActiveViewerTab("deliverable");
+    setSelectedNav("console");
+    setConsolePanelTab("deliverable");
   };
   return (
     <div className="space-y-4">
@@ -675,41 +335,23 @@ function ResultSummary({ result, workspaceId, onReset }: {
 
       <StatGrid
         stats={[
-          { label: "Sections drafted", value: (result.updated_section_ids ?? []).length },
-          { label: "Skipped", value: (result.skipped_section_ids ?? []).length },
+          { label: "Sections drafted", value: (result.section_updates ?? []).filter((u) => u.generated_content.trim()).length },
+          { label: "Sections skipped", value: (result.skipped_section_ids ?? []).length },
           { label: "Sources used", value: (result.selected_source_ids ?? []).length },
+          { label: "DR context used", value: (result.deep_research_context_ids ?? []).length },
         ]}
-        columns={3}
       />
 
       {(result.unresolved_questions ?? []).length > 0 && (
         <div>
-          <h4 className="text-xs font-medium text-surface-600 mb-1">Open questions identified</h4>
-          <p className="text-[11px] text-surface-400 mb-1.5">
-            Gaps or uncertainties found during drafting.
-            {(result.follow_up_items ?? []).length > 0 && (
-              <> The most actionable ones were added to Agenda.</>
-            )}
-          </p>
-          <ul className="space-y-1">
-            {(result.unresolved_questions ?? []).map((q, i) => {
-              const promoted = (result.follow_up_items ?? []).some(
-                (f) => f.title.toLowerCase().includes(q.slice(0, 30).toLowerCase()) ||
-                       q.toLowerCase().includes(f.title.slice(0, 30).toLowerCase())
-              );
-              return (
-                <li key={i} className="text-xs text-surface-500 flex items-start gap-1.5">
-                  <ChevronRight className="w-3 h-3 mt-0.5 flex-shrink-0 text-surface-400" />
-                  <span className="flex-1">{q}</span>
-                  {promoted && (
-                    <span className="text-[9px] text-accent-600 bg-accent-50 border border-accent-200 px-1.5 py-0.5 rounded shrink-0">
-                      → Agenda
-                    </span>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
+          <h4 className="text-xs font-medium text-surface-600 mb-1">Open questions</h4>
+          <div className="space-y-1">
+            {(result.unresolved_questions ?? []).slice(0, 5).map((q, i) => (
+              <div key={i} className="text-xs text-surface-600 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5">
+                {q}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

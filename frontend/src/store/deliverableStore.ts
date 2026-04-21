@@ -29,6 +29,7 @@ interface DeliverableStore {
   unlinkSourceFromSection: (workspaceId: string, deliverableId: string, sectionId: string, sourceId: string) => void;
 
   applyAIContent: (workspaceId: string, deliverableId: string, sectionId: string, content: string, mode: "draft" | "revise", sourceIdsUsed: string[]) => void;
+  clearWorkspace: (workspaceId: string) => void;
 }
 
 function uid(): string {
@@ -272,6 +273,20 @@ export const useDeliverableStore = create<DeliverableStore>()(
           lastAIMode: mode,
           lastSourceIdsUsed: sourceIdsUsed,
         })))),
+
+      clearWorkspace: (workspaceId) =>
+        set((s) => {
+          const { [workspaceId]: _, ...restDeliverables } = s.deliverablesByWorkspace;
+          const { [workspaceId]: __, ...restActive } = s.activeDeliverableIdByWorkspace;
+          const removedIds = (s.deliverablesByWorkspace[workspaceId] ?? []).map((d) => d.id);
+          const selectedCopy = { ...s.selectedSectionIdByDeliverable };
+          for (const id of removedIds) delete selectedCopy[id];
+          return {
+            deliverablesByWorkspace: restDeliverables,
+            activeDeliverableIdByWorkspace: restActive,
+            selectedSectionIdByDeliverable: selectedCopy,
+          };
+        }),
     }),
     {
       name: "pp_deliverables",

@@ -1,5 +1,6 @@
 import json
 import uuid
+import time
 import structlog
 import asyncio
 from typing import Any
@@ -13,7 +14,10 @@ from app.api.drafts import _resolve_llm
 
 from app.deep_research.graph import compiled_graph
 from app.deep_research.state import DeepResearchState
-from app.deep_research.models import ResearchReport, ReportSection
+from app.deep_research.models import ResearchReport, ReportSection, Plan, SubQuestion
+from app.deep_research.config import DEPTH_CONFIG
+from app.deep_research.prompts import PLAN_SYSTEM, PLAN_USER
+from app.deep_research.llm_factory import make_llm as make_dr_llm
 from app.llm.client import LLMClient
 
 logger = structlog.get_logger()
@@ -54,12 +58,51 @@ class DRSectionPayload(BaseModel):
     linkedSourceIds: list[str] = []
 
 
+class PrePlanSubQuestion(BaseModel):
+    id: str
+    question: str
+    search_queries: list[str] = []
+    priority: int = 1
+    rationale: str = ""
+
+
+class PrePlan(BaseModel):
+    sub_questions: list[PrePlanSubQuestion]
+    depth: str = "standard"
+
+
 class DeepResearchRequest(BaseModel):
     input: DeepResearchInput
     workspace_id: str
     workspace_sources: list[DRSourcePayload] = []
     existing_sections: list[DRSectionPayload] = []
     active_paper_id: str | None = None
+    pre_plan: PrePlan | None = None
+
+
+# ── Generate-plan request/response ────────────────────────────────────────────
+
+class GeneratePlanRequest(BaseModel):
+    topic: str
+    workspace_id: str
+    workspace_sources: list[DRSourcePayload] = []
+    active_paper_id: str | None = None
+
+
+class SubQuestionPreview(BaseModel):
+    id: str
+    question: str
+    rationale: str
+    search_queries: list[str] = []
+    priority: int = 1
+
+
+class GeneratePlanResponse(BaseModel):
+    sub_questions: list[SubQuestionPreview]
+    overall_approach: str
+    recommended_depth: str
+    sources_strategy: str
+    focus_note: str | None = None
 
 
 # ── Response models (unchanged — frontend contract) ─────────────────────────
@@ -194,15 +237,31 @@ def _build_initial_state(req: DeepResearchRequest, api_key: str, base_url: str |
 
     user_sources = [s.title for s in req.workspace_sources if s.label != "discarded"]
 
+    # If pre_plan provided, convert to SubQuestion models
+    pre_sub_questions: list[SubQuestion] = []
+    depth = req.input.depth
+    if req.pre_plan:
+        depth = req.pre_plan.depth or depth
+        pre_sub_questions = [
+            SubQuestion(
+                id=sq.id,
+                question=sq.question,
+                search_queries=sq.search_queries or [sq.question],
+                priority=sq.priority,
+                rationale=sq.rationale or "",
+            )
+            for sq in req.pre_plan.sub_questions
+        ]
+
     return DeepResearchState(
         topic=topic,
         user_sources=user_sources,
-        depth=req.input.depth,
+        depth=depth,
         workspace_id=req.workspace_id,
         api_key=api_key,
         llm_base_url=base_url,
         llm_model=model,
-        sub_questions=[],
+        sub_questions=pre_sub_questions,
         sub_reports=[],
         failed_queries=[],
         replan_count=0,
@@ -240,6 +299,124 @@ def _report_to_result(
         ],
         summary=report.executive_summary[:300],
         selected_source_ids=source_urls,
+    )
+
+
+# ── Generate plan endpoint ────────────────────────────────────────────────────
+
+@router.post("/generate-plan", response_model=GeneratePlanResponse)
+async def generate_plan(
+    req: GeneratePlanRequest,
+    guest_id: str = Depends(require_guest_id),
+):
+    topic = req.topic.strip()
+    if not topic:
+        raise ValueError("Topic is required")
+
+    t0 = time.monotonic()
+    logger.info("generate_plan_start", topic=topic[:80], workspace_id=req.workspace_id)
+
+    try:
+        llm_client = await _resolve_llm(guest_id)
+    except Exception as exc:
+        logger.error("generate_plan_llm_resolve_failed", error=str(exc), elapsed_ms=int((time.monotonic() - t0) * 1000))
+        raise
+
+    logger.info("generate_plan_llm_resolved", elapsed_ms=int((time.monotonic() - t0) * 1000))
+
+    has_sources = len(req.workspace_sources) > 0
+    user_sources = [s.title for s in req.workspace_sources if s.label != "discarded"]
+
+    # Infer depth from topic complexity
+    word_count = len(topic.split())
+    recommended_depth = "standard"
+    if word_count <= 5:
+        recommended_depth = "quick"
+    elif word_count >= 20:
+        recommended_depth = "deep"
+
+    max_questions = DEPTH_CONFIG.get(recommended_depth, 5)
+    min_questions = max(3, max_questions - 2)
+
+    sources_block = ""
+    if user_sources:
+        sources_block = "User-provided sources:\n" + "\n".join(f"- {s}" for s in user_sources)
+
+    system = PLAN_SYSTEM.format(min_questions=min_questions, max_questions=max_questions)
+    user_msg = PLAN_USER.format(
+        topic=topic,
+        depth=recommended_depth,
+        max_questions=max_questions,
+        sources_block=sources_block,
+    )
+
+    # Build a minimal state dict for make_dr_llm
+    fake_state: DeepResearchState = {
+        "topic": topic,
+        "user_sources": user_sources,
+        "depth": recommended_depth,
+        "workspace_id": req.workspace_id,
+        "api_key": llm_client.resolved.api_key,
+        "llm_base_url": llm_client.resolved.base_url,
+        "llm_model": llm_client.resolved.model,
+        "sub_questions": [],
+        "sub_reports": [],
+        "failed_queries": [],
+        "replan_count": 0,
+        "final_report": None,
+    }
+
+    llm = make_dr_llm(fake_state, max_tokens=2000, temperature=0.3)
+    structured_llm = llm.with_structured_output(Plan)
+
+    logger.info("generate_plan_llm_invoke_start", model=llm_client.resolved.model, depth=recommended_depth, sources_count=len(user_sources))
+    t1 = time.monotonic()
+
+    try:
+        plan: Plan = await asyncio.wait_for(
+            structured_llm.ainvoke([
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_msg},
+            ]),
+            timeout=90,
+        )
+    except asyncio.TimeoutError:
+        elapsed = int((time.monotonic() - t1) * 1000)
+        logger.error("generate_plan_llm_timeout", elapsed_ms=elapsed)
+        raise ValueError("Plan generation timed out after 90s. Please try again or simplify your topic.")
+
+    elapsed_llm = int((time.monotonic() - t1) * 1000)
+    logger.info("generate_plan_llm_invoke_done", elapsed_ms=elapsed_llm, sub_questions=len(plan.sub_questions))
+
+    # Determine sources strategy
+    if has_sources:
+        sources_strategy = "workspace + web"
+    else:
+        sources_strategy = "web only"
+
+    # Generate focus note for broad topics
+    focus_note = None
+    if word_count <= 3:
+        focus_note = f"Your topic is broad — I've broken it into {len(plan.sub_questions)} focused sub-questions to cover the key angles."
+
+    total_ms = int((time.monotonic() - t0) * 1000)
+    logger.info("generate_plan_done", total_ms=total_ms, sub_questions=len(plan.sub_questions))
+
+    return GeneratePlanResponse(
+        sub_questions=[
+            SubQuestionPreview(
+                id=sq.id,
+                question=sq.question,
+                rationale=sq.rationale,
+                search_queries=sq.search_queries,
+                priority=sq.priority,
+            )
+            for sq in plan.sub_questions
+        ],
+        overall_approach=plan.overall_approach,
+        recommended_depth=recommended_depth,
+        sources_strategy=sources_strategy,
+        focus_note=focus_note,
     )
 
 
@@ -322,17 +499,21 @@ async def run_deep_research_stream(
             return f"data: {payload}\n\n"
 
         try:
-            # Validate
-            yield emit("stage", {"stage": "validating", "message": "Validating input..."})
-            await asyncio.sleep(0)
+            # Skip validation when pre_plan is provided (already validated during generate-plan)
+            has_pre_plan = req.pre_plan is not None
 
-            clarifications = _validate_and_clarify(req)
-            if clarifications:
-                yield emit("result", {
-                    "status": "needs_clarification", "run_id": run_id,
-                    "clarification_questions": [c.model_dump() for c in clarifications],
-                })
-                return
+            if not has_pre_plan:
+                # Validate
+                yield emit("stage", {"stage": "validating", "message": "Validating input..."})
+                await asyncio.sleep(0)
+
+                clarifications = _validate_and_clarify(req)
+                if clarifications:
+                    yield emit("result", {
+                        "status": "needs_clarification", "run_id": run_id,
+                        "clarification_questions": [c.model_dump() for c in clarifications],
+                    })
+                    return
 
             # Resolve LLM
             try:
@@ -345,20 +526,33 @@ async def run_deep_research_stream(
                 })
                 return
 
-            # LLM-driven topic validation (only for topics that passed fast checks)
-            yield emit("stage", {"stage": "validating", "message": "Evaluating topic clarity..."})
-            await asyncio.sleep(0)
-            llm_clarifications = await _llm_validate_topic(req, llm)
-            if llm_clarifications:
-                yield emit("result", {
-                    "status": "needs_clarification", "run_id": run_id,
-                    "clarification_questions": [c.model_dump() for c in llm_clarifications],
-                })
-                return
+            if not has_pre_plan:
+                # LLM-driven topic validation (only for topics that passed fast checks)
+                yield emit("stage", {"stage": "validating", "message": "Evaluating topic clarity..."})
+                await asyncio.sleep(0)
+                llm_clarifications = await _llm_validate_topic(req, llm)
+                if llm_clarifications:
+                    yield emit("result", {
+                        "status": "needs_clarification", "run_id": run_id,
+                        "clarification_questions": [c.model_dump() for c in llm_clarifications],
+                    })
+                    return
 
             initial_state = _build_initial_state(req, llm.resolved.api_key, llm.resolved.base_url, llm.resolved.model)
 
-            yield emit("stage", {"stage": "planning", "message": "Decomposing research topic..."})
+            if has_pre_plan:
+                yield emit("stage", {"stage": "planning", "message": "Using confirmed plan..."})
+                yield emit("progress", {
+                    "stage": "planning",
+                    "sub_questions": [
+                        {"id": sq.id, "question": sq.question}
+                        for sq in initial_state["sub_questions"]
+                    ],
+                    "message": f"Plan confirmed — {len(initial_state['sub_questions'])} sub-questions",
+                })
+                yield emit("stage", {"stage": "executing", "message": "Investigating sub-questions..."})
+            else:
+                yield emit("stage", {"stage": "planning", "message": "Decomposing research topic..."})
 
             current_node = None
             final_report = None
@@ -378,6 +572,11 @@ async def run_deep_research_stream(
                 if kind == "on_chain_start" and name in (
                     "plan", "execute", "replan", "synthesize", "evaluate"
                 ):
+                    # Skip redundant plan stage when pre_plan already emitted it
+                    if name == "plan" and has_pre_plan:
+                        last_event_time = now
+                        continue
+
                     current_node = name
                     stage_map = {
                         "plan": ("planning", "Decomposing research topic..."),

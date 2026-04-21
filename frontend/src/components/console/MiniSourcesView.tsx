@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Library, Search, Check } from "lucide-react";
+import { Library, Search, Check, Compass } from "lucide-react";
 import clsx from "clsx";
 import { useSourceStore } from "@/store/sourceStore";
 import type { WorkspaceSource } from "@/types";
@@ -53,6 +53,13 @@ export function MiniSourcesView({ workspaceId, onFillInput }: Props) {
           <span className="text-[10px] text-surface-400">
             {includedSources.length} of {sources.length} included
           </span>
+          <button
+            onClick={() => onFillInput?.("Find more papers related to my research")}
+            className="flex items-center gap-1 text-[10px] text-accent-600 hover:text-accent-700 font-medium"
+          >
+            <Compass className="w-3 h-3" />
+            Discover more
+          </button>
         </div>
       </div>
 

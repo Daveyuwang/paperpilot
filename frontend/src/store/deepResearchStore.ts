@@ -4,6 +4,8 @@ import type { ClarificationQuestion, DeepResearchRunResult } from "@/types";
 
 export type DeepResearchStatus =
   | "idle"
+  | "generating_plan"
+  | "plan_ready"
   | "validating"
   | "needs_clarification"
   | "planning"
@@ -17,7 +19,7 @@ export type DeepResearchStatus =
   | "failed";
 
 const RUNNING_STATUSES: DeepResearchStatus[] = [
-  "validating", "planning", "executing", "evaluating", "replanning", "synthesizing",
+  "generating_plan", "validating", "planning", "executing", "evaluating", "replanning", "synthesizing",
 ];
 
 export type MacroStageKey = "plan" | "research" | "evaluate" | "write" | "context" | "draft" | "finalize";
@@ -41,6 +43,7 @@ export interface SubQuestionProgress {
   confidence?: number;
   retryCount: number;
   isSupplementary?: boolean;
+  failReason?: string;
 }
 
 export interface SectionProgressV2 {
@@ -99,6 +102,14 @@ export interface ActivityEvent {
   status: "active" | "done";
 }
 
+export interface GeneratedDRPlan {
+  subQuestions: { id: string; question: string; rationale: string; searchQueries: string[]; priority: number }[];
+  overallApproach: string;
+  recommendedDepth: string;
+  sourcesStrategy: string;
+  focusNote: string | null;
+}
+
 interface DeepResearchState {
   status: DeepResearchStatus;
   input: DeepResearchInput;
@@ -106,6 +117,9 @@ interface DeepResearchState {
   clarificationQuestions: ClarificationQuestion[];
   errorMessage: string | null;
   createdDeliverableId: string | null;
+
+  // Plan generation
+  generatedPlan: GeneratedDRPlan | null;
 
   // Streaming state
   currentStageMessage: string | null;
@@ -133,6 +147,10 @@ interface DeepResearchState {
   setFailed: (message: string) => void;
   setBlocked: (message: string) => void;
   setCreatedDeliverableId: (id: string) => void;
+  setGeneratedPlan: (plan: GeneratedDRPlan) => void;
+  clearPlan: () => void;
+  startPlanGeneration: () => void;
+  completePlanGeneration: () => void;
   // Streaming actions
   setStageMessage: (message: string) => void;
   initSectionsProgress: (titles: string[]) => void;
@@ -166,6 +184,7 @@ export const useDeepResearchStore = create<DeepResearchState>()(
       clarificationQuestions: [],
       errorMessage: null,
       createdDeliverableId: null,
+      generatedPlan: null,
       currentStageMessage: null,
       sectionsProgress: [],
       sourcesFound: 0,
@@ -181,29 +200,46 @@ export const useDeepResearchStore = create<DeepResearchState>()(
 
       setInput: (partial) => set((s) => ({ input: { ...s.input, ...partial } })),
 
-      startRun: () => set({
-        status: "validating",
-        result: null,
-        clarificationQuestions: [],
-        errorMessage: null,
-        createdDeliverableId: null,
-        currentStageMessage: null,
-        sectionsProgress: [],
-        sourcesFound: 0,
-        sourcesSelected: 0,
-        generatedTitle: null,
-        dynamicStages: [],
-        activityLog: [],
-        macroStages: [
-          { key: "plan", label: "Plan", status: "pending" },
-          { key: "research", label: "Research", status: "pending" },
-          { key: "evaluate", label: "Evaluate", status: "pending" },
-          { key: "write", label: "Write", status: "pending" },
-        ],
-        subQuestions: [],
-        sectionsProgressV2: [],
-        planSummary: null,
-        currentActivity: null,
+      startRun: () => set((s) => {
+        const hasPlan = !!s.generatedPlan;
+        const existingPlanStage = s.macroStages.find((st) => st.key === "plan");
+        const planStage = existingPlanStage && existingPlanStage.status === "completed"
+          ? existingPlanStage
+          : { key: "plan" as const, label: "Plan", status: "pending" as const };
+
+        return {
+          status: "validating",
+          result: null,
+          clarificationQuestions: [],
+          errorMessage: null,
+          createdDeliverableId: null,
+          currentStageMessage: null,
+          sectionsProgress: [],
+          sourcesFound: 0,
+          sourcesSelected: 0,
+          generatedTitle: null,
+          dynamicStages: [],
+          activityLog: [],
+          macroStages: [
+            planStage,
+            { key: "research" as const, label: "Research", status: "pending" as const },
+            { key: "evaluate" as const, label: "Evaluate", status: "pending" as const },
+            { key: "write" as const, label: "Write", status: "pending" as const },
+          ],
+          subQuestions: hasPlan
+            ? s.generatedPlan!.subQuestions.map((sq) => ({
+                id: sq.id,
+                question: sq.question,
+                status: "pending" as const,
+                retryCount: 0,
+              }))
+            : [],
+          sectionsProgressV2: [],
+          planSummary: hasPlan
+            ? `Generated ${s.generatedPlan!.subQuestions.length} research questions`
+            : null,
+          currentActivity: null,
+        };
       }),
 
       setStatus: (status) => set({ status }),
@@ -220,6 +256,35 @@ export const useDeepResearchStore = create<DeepResearchState>()(
       setBlocked: (message) => set({ status: "blocked", errorMessage: message }),
 
       setCreatedDeliverableId: (id) => set({ createdDeliverableId: id }),
+
+      setGeneratedPlan: (plan) => set({ generatedPlan: plan, status: "plan_ready" }),
+
+      clearPlan: () => set({ generatedPlan: null, status: "idle" }),
+
+      startPlanGeneration: () => set({
+        status: "generating_plan",
+        macroStages: [
+          { key: "plan" as const, label: "Plan", status: "in_progress" as const, startedAt: Date.now() },
+          { key: "research" as const, label: "Research", status: "pending" as const },
+          { key: "evaluate" as const, label: "Evaluate", status: "pending" as const },
+          { key: "write" as const, label: "Write", status: "pending" as const },
+        ],
+        currentActivity: "Generating research plan...",
+      }),
+
+      completePlanGeneration: () => set((s) => ({
+        macroStages: s.macroStages.map((stage) => {
+          if (stage.key !== "plan") return stage;
+          const now = Date.now();
+          return {
+            ...stage,
+            status: "completed" as const,
+            completedAt: now,
+            durationMs: stage.startedAt ? now - stage.startedAt : undefined,
+          };
+        }),
+        currentActivity: null,
+      })),
 
       setStageMessage: (message) => set({ currentStageMessage: message }),
 
@@ -341,6 +406,7 @@ export const useDeepResearchStore = create<DeepResearchState>()(
         clarificationQuestions: [],
         errorMessage: null,
         createdDeliverableId: null,
+        generatedPlan: null,
         currentStageMessage: null,
         sectionsProgress: [],
         sourcesFound: 0,

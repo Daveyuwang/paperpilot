@@ -48,7 +48,7 @@ export function ReaderPage({
   return (
     <div className="flex h-full min-w-0 bg-white">
       {/* Left: Paper QA chat */}
-      <div className="flex flex-col flex-[5] min-w-[400px] max-w-[560px] border-r border-surface-200">
+      <div className="flex flex-col flex-[6] min-w-[400px] max-w-[600px] border-r border-surface-200">
         {/* Identity header */}
         <div className="flex-shrink-0 px-4 py-2 border-b border-surface-200 bg-surface-50 flex items-center gap-2">
           <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-accent-600 bg-accent-50 border border-accent-200 px-1.5 py-0.5 rounded uppercase tracking-wider">

@@ -27,10 +27,10 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
           h3: ({ children }) => (
             <h5 className="text-sm font-medium text-surface-700 mt-2 mb-1">{children}</h5>
           ),
-          p: ({ children }) => <p className="mb-2 last:mb-0 text-inherit">{children}</p>,
+          p: ({ children }) => <p className="mb-2 last:mb-0 text-surface-700">{children}</p>,
           ul: ({ children }) => <ul className="list-disc pl-6 mb-2 space-y-1">{children}</ul>,
           ol: ({ children }) => <ol className="list-decimal pl-6 mb-2 space-y-1">{children}</ol>,
-          li: ({ children }) => <li className="text-sm pl-1 text-inherit">{children}</li>,
+          li: ({ children }) => <li className="text-sm pl-1 text-surface-700">{children}</li>,
           a: ({ href, children }) => (
             <a
               href={href}
@@ -82,7 +82,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
             </th>
           ),
           td: ({ children }) => (
-            <td className="px-3 py-1.5 border-b border-surface-100 text-inherit">{children}</td>
+            <td className="px-3 py-1.5 border-b border-surface-100 text-surface-700">{children}</td>
           ),
           tr: ({ children }) => (
             <tr className="even:bg-surface-50">{children}</tr>
@@ -92,7 +92,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
             <strong className="font-semibold text-surface-800">{children}</strong>
           ),
         }}
-      />
+      >{content}</ReactMarkdown>
     </div>
   );
 });

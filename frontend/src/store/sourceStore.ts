@@ -30,6 +30,7 @@ interface SourceStore {
   setAllIncluded: (workspaceId: string, included: boolean) => void;
   removeSource: (workspaceId: string, id: string) => void;
   syncUploads: (workspaceId: string, papers: PaperListItem[]) => void;
+  clearWorkspace: (workspaceId: string) => void;
 }
 
 export const useSourceStore = create<SourceStore>()(
@@ -187,6 +188,12 @@ export const useSourceStore = create<SourceStore>()(
           });
         }
       },
+
+      clearWorkspace: (workspaceId) =>
+        set((s) => {
+          const { [workspaceId]: _, ...rest } = s.sourcesByWorkspace;
+          return { sourcesByWorkspace: rest };
+        }),
     }),
     {
       name: "pp_sources",

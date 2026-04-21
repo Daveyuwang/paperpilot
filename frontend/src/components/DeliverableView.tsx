@@ -883,8 +883,7 @@ function SectionContentEditor({
     return (
       <div
         onClick={() => setEditing(true)}
-        className="min-h-[120px] text-sm leading-relaxed cursor-text hover:bg-surface-50 rounded-lg px-1 py-1 -mx-1 transition-colors"
-        style={{ color: '#3d3830' }}
+        className="min-h-[120px] text-sm text-surface-700 leading-relaxed cursor-text hover:bg-surface-50 rounded-lg px-1 py-1 -mx-1 transition-colors"
         title="Click to edit"
       >
         <MarkdownRenderer content={value} />

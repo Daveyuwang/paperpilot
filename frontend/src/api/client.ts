@@ -219,6 +219,39 @@ export const api = {
     }
   },
 
+  // Deep Research — generate plan
+  async generateDRPlan(payload: {
+    topic: string;
+    workspace_id: string;
+    workspace_sources: { id: string; title: string; authors: string[]; year: number | null; abstract: string | null; provider: string; paper_id: string | null; label: string }[];
+    active_paper_id?: string | null;
+  }): Promise<{
+    sub_questions: { id: string; question: string; rationale: string; search_queries: string[]; priority: number }[];
+    overall_approach: string;
+    recommended_depth: string;
+    sources_strategy: string;
+    focus_note: string | null;
+  }> {
+    return request("/api/deep-research/generate-plan", { method: "POST", body: JSON.stringify(payload) });
+  },
+
+  // Proposal/Plan — generate plan
+  async generatePPPlan(payload: {
+    mode: string;
+    topic: string;
+    workspace_id: string;
+    workspace_sources: { id: string; title: string; authors: string[]; year: number | null; abstract: string | null; provider: string; paper_id: string | null; label: string }[];
+    active_paper_id?: string | null;
+  }): Promise<{
+    outline_sections: { title: string; description: string }[];
+    overall_approach: string;
+    recommended_depth: string;
+    sources_strategy: string;
+    focus_note: string | null;
+  }> {
+    return request("/api/proposal-plan/generate-plan", { method: "POST", body: JSON.stringify(payload) });
+  },
+
   // Deep Research
   runDeepResearch(payload: {
     input: {
@@ -260,6 +293,10 @@ export const api = {
       workspace_sources: { id: string; title: string; authors: string[]; year: number | null; abstract: string | null; provider: string; paper_id: string | null; label: string }[];
       existing_sections?: { id: string; title: string; content: string; order: number; linkedSourceIds: string[] }[];
       active_paper_id?: string | null;
+      pre_plan?: {
+        sub_questions: { id: string; question: string; search_queries: string[]; priority: number; rationale: string }[];
+        depth: string;
+      } | null;
     },
     onEvent: (event: Record<string, unknown>) => void,
   ): Promise<void> {
@@ -331,6 +368,10 @@ export const api = {
       existing_sections?: { id: string; title: string; content: string; order: number; linkedSourceIds: string[] }[];
       deep_research_context?: { deliverable_id: string; title: string; sections: { id: string; title: string; content: string; order: number; linkedSourceIds: string[] }[] }[];
       active_paper_id?: string | null;
+      pre_plan?: {
+        outline_sections: string[];
+        depth: string;
+      } | null;
     },
     onEvent: (event: Record<string, unknown>) => void,
   ): Promise<void> {

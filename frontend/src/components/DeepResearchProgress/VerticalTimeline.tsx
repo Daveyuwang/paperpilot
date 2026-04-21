@@ -32,9 +32,12 @@ export function VerticalTimeline({
   currentActivity,
 }: Props) {
   const completedSQ = subQuestions.filter((sq) => sq.status === "completed").length;
+  const failedSQ = subQuestions.filter((sq) => sq.status === "failed").length;
   const totalSQ = subQuestions.length;
   const completedSec = sectionsProgress.filter((s) => s.status === "done").length;
   const totalSec = sectionsProgress.length;
+
+  const failedQuestions = subQuestions.filter((sq) => sq.status === "failed");
 
   function getRightLabel(stage: MacroStage): string {
     if (stage.status === "completed" && stage.durationMs) {
@@ -57,6 +60,20 @@ export function VerticalTimeline({
     }
     if (stage.key === "research" && subQuestions.length > 0 && stage.status !== "pending") {
       return <SubQuestionList subQuestions={subQuestions} />;
+    }
+    if (stage.key === "evaluate" && failedSQ > 0 && stage.status !== "pending") {
+      return (
+        <div className="mt-1.5 px-3 py-2 rounded bg-amber-50 border border-amber-200 text-xs text-amber-800">
+          <p>
+            Based on {completedSQ} of {totalSQ} research questions.
+            {failedQuestions.length === 1
+              ? ` The question about "${failedQuestions[0].question.slice(0, 60)}" could not be researched`
+              : ` Questions about ${failedQuestions.map((q) => `"${q.question.slice(0, 40)}"`).join(" and ")} could not be researched`
+            }
+            {" — results may be incomplete in these areas."}
+          </p>
+        </div>
+      );
     }
     if ((stage.key === "write" || stage.key === "draft") && sectionsProgress.length > 0 && stage.status !== "pending") {
       return <SectionProgressList sections={sectionsProgress} />;

@@ -59,6 +59,11 @@ function clearSessionForPaper(paperId: string, wsId: string) {
   }
 }
 
+export function clearWorkspaceStorage(wsId: string) {
+  localStorage.removeItem(activeKey(wsId));
+  localStorage.removeItem(sessionMapKey(wsId));
+}
+
 // ── Store ─────────────────────────────────────────────────────────────────
 
 interface PaperStore {

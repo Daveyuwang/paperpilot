@@ -14,24 +14,11 @@ interface Props {
 }
 
 export function ConsolePage({ onHighlight, queuedQuestion, onQueuedQuestionHandled }: Props) {
-  const { getActiveWorkspace, consolePanelOpen } = useWorkspaceStore();
   const nonceRef = useRef(Date.now());
   const fillInputRef = useRef<((text: string) => void) | null>(null);
   const [localQueued, setLocalQueued] = useState<{ id?: string; question: string; nonce: number } | null>(null);
 
-  const workspace = getActiveWorkspace();
-  const wid = workspace?.id ?? "default";
-
   const effectiveQueued = queuedQuestion ?? localQueued;
-
-  const handleDraftRequest = useCallback((sectionTitle: string) => {
-    nonceRef.current += 1;
-    setLocalQueued({ question: `Draft the "${sectionTitle}" section for my deliverable`, nonce: nonceRef.current });
-  }, []);
-
-  const handleFillInput = useCallback((text: string) => {
-    fillInputRef.current?.(text);
-  }, []);
 
   const handleQueuedHandled = useCallback((nonce: number) => {
     if (localQueued?.nonce === nonce) {
@@ -42,30 +29,23 @@ export function ConsolePage({ onHighlight, queuedQuestion, onQueuedQuestionHandl
 
   return (
     <div className="flex h-full min-w-0 bg-white">
-      {/* Chat column */}
-      <div className="flex flex-col flex-1 min-w-0">
-        <QAPanel
-          onHighlight={onHighlight}
-          queuedQuestion={effectiveQueued}
-          onQueuedQuestionHandled={handleQueuedHandled}
-          forceConsole
-          centered
-          fillInputRef={fillInputRef}
-        />
-      </div>
-
-      {/* Side panel — animated slide */}
-      <div
-        className="flex-shrink-0 h-full overflow-hidden transition-[width] duration-300 ease-in-out"
-        style={{ width: consolePanelOpen ? 340 : 0 }}
-      >
-        <div className="w-[340px] h-full">
-          <ConsoleSidePanel
-            workspaceId={wid}
-            onDraftRequest={handleDraftRequest}
-            onFillInput={handleFillInput}
+      {/* Left: Chat */}
+      <div className="flex flex-col flex-[6] min-w-[400px] max-w-[600px] border-r border-surface-200">
+        <div className="flex-1 min-h-0">
+          <QAPanel
+            onHighlight={onHighlight}
+            queuedQuestion={effectiveQueued}
+            onQueuedQuestionHandled={handleQueuedHandled}
+            forceConsole
+            centered
+            fillInputRef={fillInputRef}
           />
         </div>
+      </div>
+
+      {/* Right: Deliverable / Sources viewer */}
+      <div className="flex-[7] min-w-0 h-full">
+        <ConsoleSidePanel />
       </div>
     </div>
   );

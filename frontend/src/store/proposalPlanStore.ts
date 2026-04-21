@@ -5,6 +5,8 @@ import type { DynamicStage, ActivityEvent, MacroStage, MacroStageStatus, Section
 
 export type PPStatus =
   | "idle"
+  | "generating_plan"
+  | "plan_ready"
   | "validating"
   | "needs_clarification"
   | "selecting_context"
@@ -17,7 +19,7 @@ export type PPStatus =
   | "failed";
 
 const RUNNING_STATUSES: PPStatus[] = [
-  "validating", "selecting_context", "generating_outline", "drafting", "updating_agenda",
+  "generating_plan", "validating", "selecting_context", "generating_outline", "drafting", "updating_agenda",
 ];
 
 export interface ProposalPlanInput {
@@ -68,6 +70,14 @@ export interface PPSectionProgress {
   preview?: string;
 }
 
+export interface GeneratedPPPlan {
+  outlineSections: { title: string; description: string }[];
+  overallApproach: string;
+  recommendedDepth: string;
+  sourcesStrategy: string;
+  focusNote: string | null;
+}
+
 interface ProposalPlanState {
   status: PPStatus;
   input: ProposalPlanInput;
@@ -75,6 +85,9 @@ interface ProposalPlanState {
   clarificationQuestions: ClarificationQuestion[];
   errorMessage: string | null;
   createdDeliverableId: string | null;
+
+  // Plan generation
+  generatedPlan: GeneratedPPPlan | null;
 
   // Streaming state
   currentStageMessage: string | null;
@@ -99,6 +112,8 @@ interface ProposalPlanState {
   setFailed: (message: string) => void;
   setBlocked: (message: string) => void;
   setCreatedDeliverableId: (id: string) => void;
+  setGeneratedPlan: (plan: GeneratedPPPlan) => void;
+  clearPlan: () => void;
   // Streaming actions
   setStageMessage: (message: string) => void;
   initSectionsProgress: (titles: string[]) => void;
@@ -127,6 +142,7 @@ export const useProposalPlanStore = create<ProposalPlanState>()(
       clarificationQuestions: [],
       errorMessage: null,
       createdDeliverableId: null,
+      generatedPlan: null,
       currentStageMessage: null,
       sectionsProgress: [],
       sourcesSelected: 0,
@@ -174,6 +190,10 @@ export const useProposalPlanStore = create<ProposalPlanState>()(
       setBlocked: (message) => set({ status: "blocked", errorMessage: message }),
 
       setCreatedDeliverableId: (id) => set({ createdDeliverableId: id }),
+
+      setGeneratedPlan: (plan) => set({ generatedPlan: plan, status: "plan_ready" }),
+
+      clearPlan: () => set({ generatedPlan: null, status: "idle" }),
 
       setStageMessage: (message) => set({ currentStageMessage: message }),
 
@@ -259,6 +279,7 @@ export const useProposalPlanStore = create<ProposalPlanState>()(
         clarificationQuestions: [],
         errorMessage: null,
         createdDeliverableId: null,
+        generatedPlan: null,
         currentStageMessage: null,
         sectionsProgress: [],
         sourcesSelected: 0,

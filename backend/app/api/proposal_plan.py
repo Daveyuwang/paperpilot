@@ -62,6 +62,34 @@ class DRContextPayload(BaseModel):
     sections: list[PPSectionPayload] = []
 
 
+# ── Generate-plan request/response ────────────────────────────────────────────
+
+class PPGeneratePlanRequest(BaseModel):
+    mode: str  # proposal | research_plan
+    topic: str
+    workspace_id: str
+    workspace_sources: list[PPSourcePayload] = []
+    active_paper_id: str | None = None
+
+
+class OutlineSectionPreview(BaseModel):
+    title: str
+    description: str = ""
+
+
+class PPGeneratePlanResponse(BaseModel):
+    outline_sections: list[OutlineSectionPreview]
+    overall_approach: str
+    recommended_depth: str
+    sources_strategy: str
+    focus_note: str | None = None
+
+
+class PPPrePlan(BaseModel):
+    outline_sections: list[str]
+    depth: str = "standard"
+
+
 class ProposalPlanRequest(BaseModel):
     input: ProposalPlanInput
     workspace_id: str
@@ -69,6 +97,7 @@ class ProposalPlanRequest(BaseModel):
     existing_sections: list[PPSectionPayload] = []
     deep_research_context: list[DRContextPayload] = []
     active_paper_id: str | None = None
+    pre_plan: PPPrePlan | None = None
 
 
 # ── Response models ───────────────────────────────────────────────────────
@@ -110,6 +139,92 @@ class ProposalPlanRunResult(BaseModel):
     follow_up_items: list[FollowUpItem] = []
     summary: str | None = None
     message: str | None = None
+
+
+# ── Generate plan endpoint ────────────────────────────────────────────────────
+
+@router.post("/generate-plan", response_model=PPGeneratePlanResponse)
+async def pp_generate_plan(
+    req: PPGeneratePlanRequest,
+    guest_id: str = Depends(require_guest_id),
+):
+    topic = req.topic.strip()
+    if not topic:
+        raise ValueError("Topic is required")
+
+    try:
+        llm = await _resolve_llm(guest_id)
+    except Exception as exc:
+        logger.error("pp_generate_plan_llm_resolve_failed", error=str(exc))
+        raise
+
+    has_sources = len(req.workspace_sources) > 0
+    is_proposal = req.mode == "proposal"
+
+    base_sections = PROPOSAL_SECTIONS if is_proposal else RESEARCH_PLAN_SECTIONS
+    doc_type = "proposal" if is_proposal else "research plan"
+
+    # Infer depth
+    word_count = len(topic.split())
+    recommended_depth = "standard"
+    if word_count <= 5:
+        recommended_depth = "quick"
+    elif word_count >= 20:
+        recommended_depth = "deep"
+
+    # Generate tailored outline via LLM
+    source_block = ""
+    if has_sources:
+        source_block = "\n".join(f"- {s.title}" for s in req.workspace_sources[:8] if s.label != "discarded")
+
+    system = (
+        f"You are a {doc_type} planning assistant. Given a topic, generate a tailored outline.\n"
+        f"Return valid JSON: {{\"title\": \"...\", \"sections\": [{{\"title\": \"...\", \"description\": \"...\"}}], \"approach\": \"...\"}}\n"
+        f"Base template sections: {', '.join(base_sections)}\n"
+        f"Adapt sections to the specific topic. Generate 5-8 sections."
+    )
+    user_msg = f"Topic: {topic}\nAvailable sources:\n{source_block or '(none)'}"
+
+    try:
+        result = await llm.create_json(
+            system=system,
+            messages=[{"role": "user", "content": user_msg}],
+            max_tokens=600,
+            temperature=0.3,
+        )
+        sections = result.get("sections", [])
+        approach = result.get("approach", f"Generate a {doc_type} covering the key aspects of the topic.")
+
+        outline_sections = []
+        for s in sections:
+            if isinstance(s, dict):
+                outline_sections.append(OutlineSectionPreview(
+                    title=s.get("title", ""),
+                    description=s.get("description", ""),
+                ))
+            elif isinstance(s, str):
+                outline_sections.append(OutlineSectionPreview(title=s))
+
+        if len(outline_sections) < 3:
+            outline_sections = [OutlineSectionPreview(title=t) for t in base_sections]
+
+    except Exception as exc:
+        logger.warning("pp_generate_plan_llm_failed", error=str(exc))
+        approach = f"Generate a {doc_type} covering the key aspects of the topic."
+        outline_sections = [OutlineSectionPreview(title=t) for t in base_sections]
+
+    sources_strategy = "workspace + web" if has_sources else "web only"
+    focus_note = None
+    if word_count <= 3:
+        focus_note = f"Your topic is broad — I've tailored the outline to cover the most important angles for a {doc_type}."
+
+    return PPGeneratePlanResponse(
+        outline_sections=outline_sections,
+        overall_approach=approach,
+        recommended_depth=recommended_depth,
+        sources_strategy=sources_strategy,
+        focus_note=focus_note,
+    )
 
 
 # ── Section templates ─────────────────────────────────────────────────────

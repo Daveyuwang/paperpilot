@@ -50,13 +50,18 @@ export function SubQuestionList({ subQuestions }: Props) {
             <span className="mt-0.5 flex-shrink-0">
               <SQIcon status={sq.status} />
             </span>
-            <span className="flex-1 min-w-0 break-words">{sq.question}</span>
+            <div className="flex-1 min-w-0">
+              <span className="break-words">{sq.question}</span>
+              {sq.status === "failed" && sq.failReason && (
+                <p className="text-[11px] text-orange-500 mt-0.5">{sq.failReason}</p>
+              )}
+            </div>
             {sq.durationMs !== undefined && sq.status === "completed" && (
               <span className="text-surface-400 tabular-nums shrink-0">
                 {sq.durationMs < 1000 ? "<1s" : `${Math.round(sq.durationMs / 1000)}s`}
               </span>
             )}
-            {sq.status === "failed" && (
+            {sq.status === "failed" && !sq.failReason && (
               <span className="text-orange-500 text-[11px] shrink-0">failed</span>
             )}
           </div>

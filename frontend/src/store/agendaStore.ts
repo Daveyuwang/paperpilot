@@ -36,6 +36,7 @@ interface AgendaState {
   resolveUpNext: () => AgendaItem | null;
   switchPaperAgenda: (paperId: string) => void;
   clearVolatile: () => void;
+  clearForWorkspace: (paperIds: string[]) => void;
   getUpNext: () => AgendaItem | null;
 }
 
@@ -227,6 +228,18 @@ export const useAgendaStore = create<AgendaState>()(
           set({ items: [] });
         }
       },
+
+      clearForWorkspace: (paperIds) =>
+        set((s) => {
+          const byPaper = { ...s.itemsByPaper };
+          for (const pid of paperIds) delete byPaper[pid];
+          const currentPaperId = s.items[0]?.paperId;
+          const clearCurrent = currentPaperId && paperIds.includes(currentPaperId);
+          return {
+            itemsByPaper: byPaper,
+            ...(clearCurrent ? { items: [] } : {}),
+          };
+        }),
 
       getUpNext: () => findUpNext(get().items),
     }),

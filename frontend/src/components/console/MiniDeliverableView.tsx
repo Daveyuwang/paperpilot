@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { FileText, ChevronRight, Plus, Sparkles, Check, Circle, BookOpen, FlaskConical, ScrollText, StickyNote } from "lucide-react";
+import { FileText, ChevronRight, Plus, Sparkles, Check, Circle, BookOpen, FlaskConical, ScrollText, StickyNote, ExternalLink, Wand2 } from "lucide-react";
 import clsx from "clsx";
 import { useDeliverableStore } from "@/store/deliverableStore";
+import { useWorkspaceStore } from "@/store/workspaceStore";
 import type { DeliverableSection, DeliverableType } from "@/types";
 
 const TYPE_LABELS: Record<DeliverableType, string> = {
@@ -26,6 +27,7 @@ interface Props {
 
 export function MiniDeliverableView({ workspaceId, onDraftRequest, onFillInput }: Props) {
   const { getDeliverables, getActiveDeliverable, setActiveDeliverable, getSelectedSectionId, selectSection } = useDeliverableStore();
+  const { setSelectedNav, setActiveViewerTab } = useWorkspaceStore();
   const deliverables = getDeliverables(workspaceId);
   const activeDeliverable = getActiveDeliverable(workspaceId);
   const selectedSectionId = activeDeliverable ? getSelectedSectionId(activeDeliverable.id) : null;
@@ -63,6 +65,27 @@ export function MiniDeliverableView({ workspaceId, onDraftRequest, onFillInput }
             <span className="text-[10px] text-surface-400 tabular-nums">{filledCount}/{totalCount}</span>
           </div>
         )}
+        <div className="flex items-center gap-1.5 mt-2">
+          {filledCount < totalCount && (
+            <button
+              onClick={() => onFillInput?.("Draft all empty sections of my deliverable")}
+              className="flex items-center gap-1 text-[10px] text-accent-600 hover:text-accent-700 font-medium px-2 py-1 rounded-md hover:bg-accent-50 transition-colors"
+            >
+              <Wand2 className="w-3 h-3" />
+              Draft all
+            </button>
+          )}
+          <button
+            onClick={() => {
+              setSelectedNav("reader");
+              setActiveViewerTab("deliverable");
+            }}
+            className="flex items-center gap-1 text-[10px] text-surface-500 hover:text-surface-700 font-medium px-2 py-1 rounded-md hover:bg-surface-100 transition-colors ml-auto"
+          >
+            <ExternalLink className="w-3 h-3" />
+            View in Reader
+          </button>
+        </div>
       </div>
 
       {/* Section list */}
@@ -77,16 +100,9 @@ export function MiniDeliverableView({ workspaceId, onDraftRequest, onFillInput }
                 isSelected={section.id === selectedSectionId}
                 onSelect={() => {
                   selectSection(activeDeliverable.id, section.id);
-                  if (onFillInput) {
-                    const hasContent = section.content.trim().length > 0;
-                    onFillInput(
-                      hasContent
-                        ? `Revise the "${section.title}" section`
-                        : `Help me write the "${section.title}" section`
-                    );
-                  }
                 }}
                 onDraft={() => onDraftRequest?.(section.title)}
+                onRevise={() => onFillInput?.(`Revise the "${section.title}" section of my deliverable`)}
               />
             ))}
         </div>
@@ -100,57 +116,76 @@ function SectionRow({
   isSelected,
   onSelect,
   onDraft,
+  onRevise,
 }: {
   section: DeliverableSection;
   isSelected: boolean;
   onSelect: () => void;
   onDraft: () => void;
+  onRevise: () => void;
 }) {
   const hasContent = section.content.trim().length > 0;
   const wordCount = hasContent ? section.content.trim().split(/\s+/).length : 0;
   const isAIDrafted = section.lastUpdatedBy === "ai";
+  const preview = hasContent ? section.content.trim().slice(0, 200).replace(/\n+/g, " ") : "";
 
   return (
-    <div
-      onClick={onSelect}
-      className={clsx(
-        "group flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer transition-all text-xs",
-        isSelected
-          ? "bg-accent-50 border border-accent-200"
-          : "hover:bg-surface-50 border border-transparent"
-      )}
-    >
-      {hasContent ? (
-        <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
-      ) : (
-        <Circle className="w-3.5 h-3.5 text-surface-300 flex-shrink-0 opacity-50" strokeDasharray="3 2" />
-      )}
-      <div className="flex-1 min-w-0">
-        <div className="truncate font-medium text-surface-700">{section.title}</div>
-        <div className="text-[10px] text-surface-400 mt-0.5">
-          {hasContent ? (
-            <span>
-              {wordCount} words
-              {isAIDrafted && <span className="ml-1 text-accent-500 font-medium">AI</span>}
-            </span>
-          ) : (
-            <span className="text-surface-300 italic">empty — click to write</span>
-          )}
+    <div>
+      <div
+        onClick={onSelect}
+        className={clsx(
+          "group flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer transition-all text-xs",
+          isSelected
+            ? "bg-accent-50 border border-accent-200"
+            : "hover:bg-surface-50 border border-transparent"
+        )}
+      >
+        {hasContent ? (
+          <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+        ) : (
+          <Circle className="w-3.5 h-3.5 text-surface-300 flex-shrink-0 opacity-50" strokeDasharray="3 2" />
+        )}
+        <div className="flex-1 min-w-0">
+          <div className="truncate font-medium text-surface-700">{section.title}</div>
+          <div className="text-[10px] text-surface-400 mt-0.5">
+            {hasContent ? (
+              <span>
+                {wordCount} words
+                {isAIDrafted && <span className="ml-1 text-accent-500 font-medium">AI</span>}
+              </span>
+            ) : (
+              <span className="text-surface-300 italic">empty — click to write</span>
+            )}
+          </div>
         </div>
+        {!hasContent && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onDraft(); }}
+            className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-accent-100 text-accent-600 transition-opacity"
+            title="Ask AI to draft"
+          >
+            <Sparkles className="w-3 h-3" />
+          </button>
+        )}
+        {hasContent && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onRevise(); }}
+            className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-accent-100 text-accent-600 transition-opacity"
+            title="Ask AI to revise"
+          >
+            <Wand2 className="w-3 h-3" />
+          </button>
+        )}
+        <ChevronRight className={clsx(
+          "w-3 h-3 flex-shrink-0 transition-colors",
+          isSelected ? "text-accent-500" : "text-surface-300"
+        )} />
       </div>
-      {!hasContent && (
-        <button
-          onClick={(e) => { e.stopPropagation(); onDraft(); }}
-          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-accent-100 text-accent-600 transition-opacity"
-          title="Ask AI to draft"
-        >
-          <Sparkles className="w-3 h-3" />
-        </button>
+      {isSelected && preview && (
+        <div className="mx-2.5 mt-1 mb-1 px-2.5 py-2 bg-surface-50 rounded-md text-[11px] text-surface-500 leading-relaxed line-clamp-3">
+          {preview}{section.content.trim().length > 200 ? "…" : ""}
+        </div>
       )}
-      <ChevronRight className={clsx(
-        "w-3 h-3 flex-shrink-0 transition-colors",
-        isSelected ? "text-accent-500" : "text-surface-300"
-      )} />
     </div>
   );
 }

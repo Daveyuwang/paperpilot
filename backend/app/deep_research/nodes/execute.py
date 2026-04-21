@@ -58,6 +58,7 @@ async def _execute_single(
                 "sq_index": sq_index, "sq_total": sq_total,
                 "question": sub_q.question,
                 "confidence": 0.0,
+                "error": "no_results",
                 "duration_ms": round((time.monotonic() - t_sq) * 1000),
                 "message": f"No results: {sub_q.question[:60]}",
             })
@@ -124,7 +125,7 @@ async def _execute_single(
             search_context=search_context,
         )
 
-        llm = make_llm(state, max_tokens=1500, temperature=0.2)
+        llm = make_llm(state, max_tokens=3000, temperature=0.2)
         structured_llm = llm.with_structured_output(SubReport)
 
         report: SubReport = await _llm_summarize(

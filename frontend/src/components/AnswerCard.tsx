@@ -462,42 +462,36 @@ export default function AnswerCard({
           {/* Structured sections — only for paper QA */}
           {!isConsole && (
             <>
-              {/* Key points */}
               {answer.key_points && answer.key_points.length > 0 && (
                 <FadeInBlock delayMs={0}>
                   <KeyPointsBlock points={answer.key_points} />
                 </FadeInBlock>
               )}
 
-              {/* Paper context (concept_explanation) */}
               {mode === "concept_explanation" && answer.paper_context && (
                 <FadeInBlock delayMs={80}>
                   <PaperContextBlock text={answer.paper_context} />
                 </FadeInBlock>
               )}
 
-              {/* Evidence */}
               {answer.evidence && answer.evidence.length > 0 && (
                 <FadeInBlock delayMs={isPhase2 ? 100 : 0}>
                   <EvidenceBlock items={answer.evidence} onCitationClick={onCitationClick} />
                 </FadeInBlock>
               )}
 
-              {/* Uncertainty */}
               {answer.uncertainty && (
                 <FadeInBlock delayMs={isPhase2 ? 200 : 0}>
                   <UncertaintyBlock text={answer.uncertainty} />
                 </FadeInBlock>
               )}
 
-              {/* Plain language */}
               {answer.plain_language && (
                 <FadeInBlock delayMs={isPhase2 ? 250 : 0}>
                   <PlainLanguageBlock text={answer.plain_language} />
                 </FadeInBlock>
               )}
 
-              {/* Bigger picture */}
               {answer.bigger_picture && (
                 <FadeInBlock delayMs={isPhase2 ? 400 : 0}>
                   <BiggerPictureBlock text={answer.bigger_picture} />
