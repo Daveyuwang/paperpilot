@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback } from "react";
-import { Send, Loader2, ArrowRight, Square, RotateCcw, MessageSquare, Search, GitCompare, PenTool, Sparkles } from "lucide-react";
+import { Send, Loader2, ArrowRight, Square, RotateCcw, MessageSquare, Search, GitCompare, PenTool, Sparkles, Pencil, X, PanelRight } from "lucide-react";
 import clsx from "clsx";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useChatStore } from "@/store/chatStore";
@@ -29,6 +29,7 @@ interface Props {
   onQueuedQuestionHandled?: (nonce: number) => void;
   forceConsole?: boolean;
   centered?: boolean;
+  fillInputRef?: React.MutableRefObject<((text: string) => void) | null>;
 }
 
 let lastAutoSubmittedQueuedNonce: number | null = null;
@@ -66,6 +67,7 @@ export function QAPanel({
   onQueuedQuestionHandled,
   forceConsole = false,
   centered = false,
+  fillInputRef,
 }: Props) {
   const { activePaper, activeSession, questions, newSession } = usePaperStore();
   const { getActiveWorkspace } = useWorkspaceStore();
@@ -93,6 +95,10 @@ export function QAPanel({
     markQuestionCovered,
     getConsoleSessionId,
     switchToSession,
+    discardPartial,
+    editingMessageId,
+    setEditingMessageId,
+    resubmitFrom,
   } = useChatStore();
 
   const { markDoneByTrailId, resolveUpNext } = useAgendaStore();
@@ -130,15 +136,54 @@ export function QAPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const slowHintTimerRef = useRef<number | null>(null);
+  const stuckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (fillInputRef) {
+      fillInputRef.current = (text: string) => {
+        setInput(text);
+        textareaRef.current?.focus();
+      };
+    }
+  }, [fillInputRef]);
+
+  const resetStuckTimer = useCallback(() => {
+    if (stuckTimerRef.current) clearTimeout(stuckTimerRef.current);
+    if (!pendingAssistantId.current) return;
+    stuckTimerRef.current = setTimeout(() => {
+      const id = pendingAssistantId.current;
+      if (!id) return;
+      const msg = useChatStore.getState().messages.find((m) => m.id === id);
+      if (msg && !msg.isDone) {
+        if (!msg.answerJson && !msg.streamingText && !msg.content) {
+          failMessage(id, "No response received — the connection may have dropped.");
+        } else {
+          finalizeMessage(id);
+        }
+        pendingAssistantId.current = null;
+        pendingCitationsRef.current = [];
+        streamingTextRef.current = "";
+      }
+    }, 20_000);
+  }, [failMessage, finalizeMessage]);
+
+  useEffect(() => {
+    return () => {
+      if (stuckTimerRef.current) clearTimeout(stuckTimerRef.current);
+    };
+  }, []);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const handleWSMessage = useCallback((msg: WSMessage) => {
+    resetStuckTimer();
     switch (msg.type) {
       case "status":
+        if (!pendingAssistantId.current) return;
         setStatus(msg.content as string);
         break;
 
       case "mode_info": {
+        if (!pendingAssistantId.current) return;
         const info = msg.content as ModeInfo;
         setCurrentMode(info.answer_mode);
         if (info.scope_label) setCurrentScopeLabel(info.scope_label);
@@ -147,68 +192,59 @@ export function QAPanel({
 
       case "token": {
         const id = pendingAssistantId.current;
-        if (id) {
-          streamingTextRef.current += msg.content as string;
-          setStreamingText(id, streamingTextRef.current);
-        }
+        if (!id) return;
+        streamingTextRef.current += msg.content as string;
+        setStreamingText(id, streamingTextRef.current);
         break;
       }
 
       case "evidence_ready":
-        // no-op: we removed ConfidenceBadge; evidence arrives via answer_json
         break;
 
       case "answer_json": {
         const id = pendingAssistantId.current;
-        if (id) {
-          setAnswerJson(id, msg.content as AnswerJSON);
-          streamingTextRef.current = "";
-          setStreamingText(id, "");
-        }
+        if (!id) return;
+        setAnswerJson(id, msg.content as AnswerJSON);
+        streamingTextRef.current = "";
+        setStreamingText(id, "");
         break;
       }
 
       case "chunk_refs": {
+        const id = pendingAssistantId.current;
+        if (!id) return;
         const citations = msg.content as Citation[];
         pendingCitationsRef.current = citations;
-        const id = pendingAssistantId.current;
-        if (id) setCitations(id, citations);
+        setCitations(id, citations);
         onHighlight(citations);
         break;
       }
 
       case "answer_done": {
+        if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
         const id = pendingAssistantId.current;
-        if (id) {
-          // If we never received answer_json or streaming text, set a fallback
-          const msg = useChatStore.getState().messages.find((m) => m.id === id);
-          if (msg && !msg.answerJson && !msg.streamingText && !msg.content) {
-            const fallbackJson = (typeof msg === "object" && msg.content === "")
-              ? (msg as any) : null;
-            if (!fallbackJson?.answerJson) {
-              setAnswerJson(id, {
-                direct_answer: "",
-                key_points: null,
-                evidence: [],
-                plain_language: null,
-                bigger_picture: null,
-                uncertainty: null,
-              } as AnswerJSON);
-            }
-          }
-          finalizeMessage(id);
-          pendingCitationsRef.current = [];
-          pendingAssistantId.current = null;
-          streamingTextRef.current = "";
-          // Mark the active trail question's agenda item as done
-          const activeQId = useChatStore.getState().activeQuestionId;
-          if (activeQId) {
-            markDoneByTrailId(activeQId);
-            resolveUpNext();
-          }
-          // Delay suggestions until done confirmation has faded (3s visible + 600ms fade + buffer)
-          setTimeout(() => setShowSuggestions(true), 3800);
+        if (!id) return;
+        const doneMsg = useChatStore.getState().messages.find((m) => m.id === id);
+        if (doneMsg && !doneMsg.answerJson && !doneMsg.streamingText && !doneMsg.content) {
+          setAnswerJson(id, {
+            direct_answer: "",
+            key_points: null,
+            evidence: [],
+            plain_language: null,
+            bigger_picture: null,
+            uncertainty: null,
+          } as AnswerJSON);
         }
+        finalizeMessage(id);
+        pendingCitationsRef.current = [];
+        pendingAssistantId.current = null;
+        streamingTextRef.current = "";
+        const activeQId = useChatStore.getState().activeQuestionId;
+        if (activeQId) {
+          markDoneByTrailId(activeQId);
+          resolveUpNext();
+        }
+        setTimeout(() => setShowSuggestions(true), 3800);
         break;
       }
 
@@ -225,6 +261,7 @@ export function QAPanel({
         break;
 
       case "error": {
+        if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
         const id = pendingAssistantId.current;
         const errText = `[Error]\n${String(msg.content ?? "Unknown error")}`;
         if (id) {
@@ -257,8 +294,17 @@ export function QAPanel({
 
     const context = !activePaper && activeWs ? {
       active_paper_id: null,
-      active_deliverable_id: null,
-      focused_section_id: null,
+      active_deliverable_id: activeDeliverable?.id ?? null,
+      focused_section_id: focusedSectionId ?? null,
+      included_sources: getIncludedSources(wid).map(s => ({
+        id: s.id,
+        title: s.title,
+        authors: s.authors ?? [],
+        year: s.year ?? null,
+        abstract: s.abstract ?? null,
+        provider: s.provider ?? "",
+        label: s.label ?? "",
+      })),
       deliverables: useDeliverableStore.getState().getDeliverables(activeWs.id).map((d) => ({
         id: d.id,
         title: d.title,
@@ -276,15 +322,19 @@ export function QAPanel({
     const id = pendingAssistantId.current;
     if (!id) return;
     disconnect();
-    reconnect();  // restore WS so next query isn't stuck
-    stopGeneration(id);
+    reconnect();
     pendingAssistantId.current = null;
     streamingTextRef.current = "";
-    // Show any previously available suggestions after stopping
+    discardPartial(id);
+    const msgs = useChatStore.getState().messages;
+    const lastUser = [...msgs].reverse().find((m) => m.role === "user");
+    if (lastUser) {
+      setEditingMessageId(lastUser.id);
+    }
     if (useChatStore.getState().suggestedQuestions.length > 0) {
       setTimeout(() => setShowSuggestions(true), 300);
     }
-  }, [disconnect, reconnect, stopGeneration]);
+  }, [disconnect, reconnect, discardPartial, setEditingMessageId]);
 
   const handleOverrideAction = useCallback((actionType: string, originalQuestion: string) => {
     if (isGenerating) return;
@@ -409,7 +459,6 @@ export function QAPanel({
 
         {messages.map((msg, idx) => {
           const isCurrentlyStreaming = msg.isStreaming && pendingAssistantId.current === msg.id;
-          // Find the preceding user message to use as the original question for override actions
           const precedingUserMsg = msg.role === "assistant"
             ? messages.slice(0, idx).reverse().find((m) => m.role === "user")
             : null;
@@ -432,18 +481,42 @@ export function QAPanel({
                 </div>
               )}
 
-              {/* User bubble */}
+              {/* User bubble — with edit support */}
               {msg.role === "user" && (
-                <div className="max-w-[80%] bg-accent-100 rounded-2xl rounded-tr-sm px-4 py-3 text-sm text-accent-700">
-                  {msg.content}
-                </div>
+                editingMessageId === msg.id ? (
+                  <EditableUserMessage
+                    content={msg.content}
+                    onResubmit={(newContent) => {
+                      resubmitFrom(msg.id, newContent);
+                      submit(newContent);
+                    }}
+                    onCancel={() => setEditingMessageId(null)}
+                  />
+                ) : (
+                  <div className="group relative">
+                    <div className={clsx(
+                      "bg-accent-100 rounded-2xl rounded-tr-sm px-4 py-3 text-sm text-accent-700",
+                      forceConsole ? "max-w-[90%]" : "max-w-[80%]"
+                    )}>
+                      {msg.content}
+                    </div>
+                    {!isGenerating && (
+                      <button
+                        onClick={() => setEditingMessageId(msg.id)}
+                        className="absolute -left-7 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-surface-400 hover:text-surface-600"
+                        title="Edit message"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                )
               )}
 
-              {/* Assistant message */}
+              {/* Assistant message — no bubble wrapper */}
               {msg.role === "assistant" && (() => {
                 const hasContent = !!(msg.streamingText || msg.answerJson);
 
-                // Phase A: waiting for first token — agent activity steps, no bubble
                 if (isCurrentlyStreaming && !hasContent) {
                   return (
                     <div className="flex items-center gap-3 py-2.5 flex-1 min-w-0">
@@ -460,12 +533,10 @@ export function QAPanel({
                   );
                 }
 
-                // Phase B: content available — full bubble, animate in on first appearance
                 return (
                   <FadeInUp animate={isCurrentlyStreaming && hasContent}>
-                    <div className="flex-1 min-w-0 bg-surface-50 border border-surface-200 rounded-2xl rounded-tl-sm px-5 py-4">
+                    <div className="flex-1 min-w-0 pl-1 border-l-2 border-accent-200 py-2">
 
-                      {/* Minimal in-bubble streaming indicator (before phase1Complete) */}
                       {isCurrentlyStreaming && !msg.phase1Complete && (
                         <div className="flex items-center justify-between gap-2 mb-3">
                           <AgentActivity statusText={statusText} isActive />
@@ -480,7 +551,6 @@ export function QAPanel({
                         </div>
                       )}
 
-                      {/* AnswerCard — scope badge only after phase1Complete */}
                       {hasContent && (
                         <AnswerCard
                           answer={
@@ -496,7 +566,8 @@ export function QAPanel({
                           streamingText={msg.streamingText || undefined}
                           phase1Complete={msg.phase1Complete}
                           evidenceCount={msg.answerJson?.evidence?.length}
-                          showScopeBadge={!!msg.phase1Complete}
+                          showScopeBadge={!!msg.phase1Complete && !forceConsole}
+                          isConsole={forceConsole}
                           onCitationClick={(page, section) => {
                             console.debug("[PaperPilot] citation_click", { page, section });
                             const citation = msg.citations.find((c) => c.page_number === page);
@@ -512,7 +583,6 @@ export function QAPanel({
                         />
                       )}
 
-                      {/* Error state */}
                       {!msg.answerJson && !msg.streamingText && msg.content.startsWith("[Error]") && (
                         <div className="text-red-400 text-sm mt-2">
                           <p className="font-semibold mb-1">Something went wrong</p>
@@ -522,12 +592,10 @@ export function QAPanel({
                         </div>
                       )}
 
-                      {/* Legacy plain-text fallback */}
                       {!msg.answerJson && !msg.isStreaming && !msg.streamingText && msg.content && !msg.content.startsWith("[Error]") && (
                         <MarkdownRenderer content={msg.content} />
                       )}
 
-                      {/* Persistent citation chips */}
                       {!isCurrentlyStreaming && msg.citations.length > 0 && (
                         <div className="mt-3 pt-3 border-t border-surface-200 flex flex-wrap gap-1.5">
                           {msg.citations.map((c, i) => {
@@ -584,6 +652,7 @@ export function QAPanel({
       {/* ── Composer ─────────────────────────────────────────────────────── */}
       <div className="flex-shrink-0 px-4 py-3 bg-white border-t border-surface-100">
         <div className={clsx(colClass)}>
+          {forceConsole && <ConsolePanelToggle />}
           <div className={clsx(
             "flex items-end gap-2 rounded-2xl border border-surface-200 bg-surface-50 px-3 py-2",
             "focus-within:border-accent-400 focus-within:ring-1 focus-within:ring-accent-400 transition-all"
@@ -697,6 +766,84 @@ function shouldShowSlowHint(statusText: string): boolean {
     return false;
   }
   return true;
+}
+
+// ── Console panel toggle (above composer) ──────────────────────────────────
+
+function ConsolePanelToggle() {
+  const { consolePanelOpen, setConsolePanelOpen } = useWorkspaceStore();
+  if (consolePanelOpen) return null;
+  return (
+    <div className="flex justify-end mb-1.5">
+      <button
+        onClick={() => setConsolePanelOpen(true)}
+        className="inline-flex items-center gap-1.5 text-[11px] text-surface-500 hover:text-surface-700 px-2 py-1 rounded-md hover:bg-surface-100 transition-colors"
+      >
+        <PanelRight className="w-3 h-3" />
+        Sources & Deliverables
+      </button>
+    </div>
+  );
+}
+
+// ── Editable user message (after stop/discard) ─────────────────────────────
+
+function EditableUserMessage({
+  content,
+  onResubmit,
+  onCancel,
+}: {
+  content: string;
+  onResubmit: (newContent: string) => void;
+  onCancel: () => void;
+}) {
+  const [text, setText] = React.useState(content);
+  const taRef = React.useRef<HTMLTextAreaElement>(null);
+
+  React.useEffect(() => {
+    if (taRef.current) {
+      taRef.current.focus();
+      taRef.current.style.height = "auto";
+      taRef.current.style.height = Math.min(taRef.current.scrollHeight, 120) + "px";
+    }
+  }, []);
+
+  return (
+    <div className="max-w-[90%] space-y-2">
+      <textarea
+        ref={taRef}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          e.target.style.height = "auto";
+          e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            if (text.trim()) onResubmit(text.trim());
+          }
+          if (e.key === "Escape") onCancel();
+        }}
+        className="w-full bg-accent-50 border border-accent-300 rounded-xl px-4 py-3 text-sm text-accent-700 resize-none focus:outline-none focus:ring-1 focus:ring-accent-400"
+        style={{ minHeight: "40px", maxHeight: "120px" }}
+      />
+      <div className="flex items-center gap-2 justify-end">
+        <button
+          onClick={onCancel}
+          className="text-xs text-surface-400 hover:text-surface-600 transition-colors px-2 py-1"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={() => text.trim() && onResubmit(text.trim())}
+          className="text-xs text-white bg-accent-600 hover:bg-accent-700 transition-colors px-3 py-1 rounded-md"
+        >
+          Resubmit
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // ── Fade-up wrapper (Phase B: bubble entrance) ────────────────────────────

@@ -6,9 +6,10 @@ import type { WorkspaceSource } from "@/types";
 
 interface Props {
   workspaceId: string;
+  onFillInput?: (text: string) => void;
 }
 
-export function MiniSourcesView({ workspaceId }: Props) {
+export function MiniSourcesView({ workspaceId, onFillInput }: Props) {
   const { getSources, getIncludedSources, setIncluded } = useSourceStore();
   const sources = getSources(workspaceId);
   const includedSources = getIncludedSources(workspaceId);
@@ -23,10 +24,14 @@ export function MiniSourcesView({ workspaceId }: Props) {
 
   if (sources.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full px-4 py-8 text-center">
-        <Library className="w-8 h-8 text-surface-300 mb-2" />
-        <p className="text-xs text-surface-500">No sources yet</p>
-        <p className="text-[10px] text-surface-400 mt-1">Upload papers or run Deep Research to add sources</p>
+      <div className="flex flex-col items-center justify-center h-full px-5 py-8 text-center">
+        <div className="w-10 h-10 rounded-full bg-surface-100 flex items-center justify-center mb-3">
+          <Library className="w-5 h-5 text-surface-400" />
+        </div>
+        <p className="text-xs font-medium text-surface-600 mb-1">No sources yet</p>
+        <p className="text-[10px] text-surface-400 leading-relaxed">
+          Upload papers in the Reader, or run Deep Research to automatically discover and add sources.
+        </p>
       </div>
     );
   }
@@ -62,6 +67,9 @@ export function MiniSourcesView({ workspaceId }: Props) {
               const isInc = includedSources.some((s) => s.id === source.id);
               setIncluded(workspaceId, source.id, !isInc);
             }}
+            onClick={() => {
+              onFillInput?.(`Tell me about "${source.title}"`);
+            }}
           />
         ))}
         {filtered.length === 0 && (
@@ -76,15 +84,20 @@ function SourceRow({
   source,
   isIncluded,
   onToggle,
+  onClick,
 }: {
   source: WorkspaceSource;
   isIncluded: boolean;
   onToggle: () => void;
+  onClick: () => void;
 }) {
   return (
-    <div className="group flex items-start gap-2 px-2.5 py-2 rounded-lg hover:bg-surface-50 transition-colors text-xs">
+    <div
+      className="group flex items-start gap-2 px-2.5 py-2 rounded-lg hover:bg-surface-50 cursor-pointer transition-colors text-xs"
+      onClick={onClick}
+    >
       <button
-        onClick={onToggle}
+        onClick={(e) => { e.stopPropagation(); onToggle(); }}
         className={clsx(
           "mt-0.5 w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors",
           isIncluded

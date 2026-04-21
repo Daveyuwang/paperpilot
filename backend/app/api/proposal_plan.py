@@ -568,6 +568,17 @@ async def run_proposal_plan(
     drafted_count = sum(1 for u in updates if u.generated_content.strip())
     doc_type = "proposal" if inp.mode == "proposal" else "research plan"
 
+    if drafted_count == 0 and not skipped_ids:
+        return ProposalPlanRunResult(
+            run_id=run_id,
+            mode=inp.mode,
+            status="failed",
+            section_updates=updates,
+            selected_source_ids=selected_ids,
+            deep_research_context_ids=dr_context_ids,
+            message=f"All {doc_type} sections failed to generate. Please check your API key and try again.",
+        )
+
     return ProposalPlanRunResult(
         run_id=run_id,
         mode=inp.mode,
@@ -626,6 +637,7 @@ async def run_proposal_plan_stream(
 
             # 3. Select sources
             yield emit("stage", {"stage": "selecting_context", "message": "Selecting sources and context..."})
+            yield emit("activity", {"activity_type": "thinking", "label": "Selecting sources and context..."})
             await asyncio.sleep(0)
             selected, selected_ids = _select_sources(req.workspace_sources, inp.use_workspace_sources)
             dr_context_text, dr_context_ids = _build_dr_context(req.deep_research_context)
@@ -648,6 +660,7 @@ async def run_proposal_plan_stream(
                 sections = [(s.id, s.title, s.content) for s in sorted(req.existing_sections, key=lambda x: x.order)]
             else:
                 yield emit("stage", {"stage": "generating_outline", "message": "Generating tailored outline..."})
+                yield emit("activity", {"activity_type": "thinking", "label": "Generating tailored outline..."})
                 generated_title, tailored_titles = await _generate_tailored_outline(llm, inp, selected, dr_context_text)
                 sections = [(f"new-{i}", title, "") for i, title in enumerate(tailored_titles)]
                 yield emit("tailored_outline", {
@@ -695,6 +708,7 @@ async def run_proposal_plan_stream(
 
             for i, (sec_id, title, existing_content) in enumerate(sections):
                 yield emit("section_start", {"index": i, "title": title})
+                yield emit("activity", {"activity_type": "writing", "label": f"Drafting: {title}"})
 
                 if existing_content.strip():
                     skipped_ids.append(sec_id)
@@ -764,25 +778,37 @@ async def run_proposal_plan_stream(
 
             # 6. Extract unresolved + follow-ups
             yield emit("stage", {"stage": "updating_agenda", "message": "Analyzing gaps and next steps..."})
+            yield emit("activity", {"activity_type": "thinking", "label": "Analyzing gaps and next steps..."})
             unresolved = await _extract_unresolved(llm, updates, inp.topic, inp.mode)
             follow_ups = _generate_follow_ups(unresolved, inp.mode)
 
             drafted_count = sum(1 for u in updates if u.generated_content.strip())
             doc_type = "proposal" if inp.mode == "proposal" else "research plan"
 
-            yield emit("result", {
-                "status": "completed", "run_id": run_id, "mode": inp.mode,
-                "data": {
-                    "section_updates": [u.dict() for u in updates],
-                    "updated_section_ids": updated_ids,
-                    "skipped_section_ids": skipped_ids,
-                    "selected_source_ids": selected_ids,
-                    "deep_research_context_ids": dr_context_ids,
-                    "unresolved_questions": unresolved,
-                    "follow_up_items": [f.dict() for f in follow_ups],
-                    "summary": f"Drafted {drafted_count} {doc_type} section(s), skipped {len(skipped_ids)}. Used {len(selected_ids)} source(s).",
-                },
-            })
+            if drafted_count == 0 and not skipped_ids:
+                yield emit("result", {
+                    "status": "failed", "run_id": run_id, "mode": inp.mode,
+                    "message": f"All {doc_type} sections failed to generate. Please check your API key and try again.",
+                    "data": {
+                        "section_updates": [u.dict() for u in updates],
+                        "selected_source_ids": selected_ids,
+                        "deep_research_context_ids": dr_context_ids,
+                    },
+                })
+            else:
+                yield emit("result", {
+                    "status": "completed", "run_id": run_id, "mode": inp.mode,
+                    "data": {
+                        "section_updates": [u.dict() for u in updates],
+                        "updated_section_ids": updated_ids,
+                        "skipped_section_ids": skipped_ids,
+                        "selected_source_ids": selected_ids,
+                        "deep_research_context_ids": dr_context_ids,
+                        "unresolved_questions": unresolved,
+                        "follow_up_items": [f.dict() for f in follow_ups],
+                        "summary": f"Drafted {drafted_count} {doc_type} section(s), skipped {len(skipped_ids)}. Used {len(selected_ids)} source(s).",
+                    },
+                })
 
         except Exception as exc:
             logger.exception("pp_stream_unexpected_error", error=str(exc))

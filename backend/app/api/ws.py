@@ -56,24 +56,37 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
             mode_override = data.get("mode_override") or None
             context = data.get("context") or {}
 
-            if is_console_session:
-                async for message in run_console_turn(
-                    session_id=session_id,
-                    workspace_id=workspace_id or "",
-                    question=question,
-                    guest_id=guest_id,
-                    context=context,
-                ):
-                    await websocket.send_json(message)
+            sent_done = False
+            try:
+                if is_console_session:
+                    async for message in run_console_turn(
+                        session_id=session_id,
+                        workspace_id=workspace_id or "",
+                        question=question,
+                        guest_id=guest_id,
+                        context=context,
+                    ):
+                        await websocket.send_json(message)
+                        if message.get("type") in ("answer_done", "error"):
+                            sent_done = True
+                else:
+                    async for message in run_agent_turn(
+                        session_id,
+                        question,
+                        question_id,
+                        mode_override=mode_override,
+                        guest_id=guest_id,
+                    ):
+                        await websocket.send_json(message)
+                        if message.get("type") in ("answer_done", "error"):
+                            sent_done = True
+            except Exception as turn_exc:
+                logger.exception("ws_turn_error", session_id=session_id, error=str(turn_exc))
+                if not sent_done:
+                    await websocket.send_json({"type": "error", "content": f"Generation failed: {str(turn_exc)[:200]}"})
             else:
-                async for message in run_agent_turn(
-                    session_id,
-                    question,
-                    question_id,
-                    mode_override=mode_override,
-                    guest_id=guest_id,
-                ):
-                    await websocket.send_json(message)
+                if not sent_done:
+                    await websocket.send_json({"type": "answer_done", "content": ""})
 
     except WebSocketDisconnect:
         logger.info("ws_disconnected", session_id=session_id, guest_id=guest_id)

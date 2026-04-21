@@ -58,6 +58,19 @@ export default function App() {
     }
   }, [activeWs?.id, loadPapers, restoreActive]);
 
+  // Reset global stores when workspace changes to prevent stale data leaking
+  const prevWsId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeWs?.id) return;
+    if (prevWsId.current && prevWsId.current !== activeWs.id) {
+      useDeepResearchStore.getState().reset();
+      useProposalPlanStore.getState().reset();
+      useChatStore.getState().initSession();
+      useAgendaStore.getState().clearVolatile();
+    }
+    prevWsId.current = activeWs.id;
+  }, [activeWs?.id]);
+
   // Health check + settings bootstrap
   useEffect(() => {
     let cancelled = false;

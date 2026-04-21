@@ -12,19 +12,10 @@ import { usePaperStore } from "@/store/paperStore";
 import { api } from "@/api/client";
 import { TaskPageShell } from "./shared/TaskPageShell";
 import { WorkflowError } from "./shared/WorkflowError";
-import { WorkflowRunPanel } from "./shared/WorkflowRunPanel";
 import { StatGrid } from "./shared/StatGrid";
 import { ClarificationPanel } from "./shared/ClarificationPanel";
+import { VerticalTimeline } from "./DeepResearchProgress/VerticalTimeline";
 import type { DeepResearchRunResult, ClarificationQuestion } from "@/types";
-
-const DR_STAGES = [
-  { key: "validating", label: "Validating input" },
-  { key: "planning", label: "Decomposing research topic" },
-  { key: "executing", label: "Investigating sub-questions" },
-  { key: "evaluating", label: "Evaluating research quality" },
-  { key: "replanning", label: "Generating follow-up questions" },
-  { key: "synthesizing", label: "Producing final report" },
-];
 
 export function DeepResearchView() {
   const { getActiveWorkspace } = useWorkspaceStore();
@@ -68,7 +59,11 @@ export function DeepResearchView() {
 /* ── Live progress (SSE-driven) ─────────────────────────────────────────── */
 
 function LiveProgress() {
-  const { status, currentStageMessage, sectionsProgress, sourcesFound, sourcesSelected, generatedTitle } = useDeepResearchStore();
+  const {
+    status, generatedTitle,
+    macroStages, subQuestions, sectionsProgressV2,
+    planSummary, currentActivity,
+  } = useDeepResearchStore();
 
   return (
     <div className="space-y-3">
@@ -77,13 +72,13 @@ function LiveProgress() {
           {generatedTitle}
         </div>
       )}
-      <WorkflowRunPanel
-        stages={DR_STAGES}
-        currentStatus={status}
-        stageMessage={currentStageMessage}
-        sectionsProgress={sectionsProgress}
-        sourcesFound={sourcesFound}
-        sourcesSelected={sourcesSelected}
+      <VerticalTimeline
+        macroStages={macroStages}
+        subQuestions={subQuestions}
+        sectionsProgress={sectionsProgressV2}
+        planSummary={planSummary}
+        currentActivity={currentActivity}
+        generatedTitle={generatedTitle}
       />
     </div>
   );
@@ -144,7 +139,7 @@ function InterruptedState() {
 
 function InputForm({ workspaceId }: { workspaceId: string }) {
   const store = useDeepResearchStore();
-  const { input, setInput, startRun, setStatus, setResult, setClarification, setFailed, setBlocked, setCreatedDeliverableId } = store;
+  const { input, setInput, startRun, setStatus, setResult, setClarification, setFailed, setBlocked, setCreatedDeliverableId, pushStage, pushActivity, completeCurrentStage } = store;
   const { getIncludedSources, addFromDiscovery, setLabel } = useSourceStore();
   const { activePaper } = usePaperStore();
   const { getDeliverables, createDeliverable, applyAIContent, setActiveDeliverable, renameDeliverable } = useDeliverableStore();
@@ -205,19 +200,97 @@ function InputForm({ workspaceId }: { workspaceId: string }) {
           const msg = event.message as string | undefined;
           s.setStatus(stage as DeepResearchStatus);
           if (msg) s.setStageMessage(msg);
+          s.pushStage(stage, msg || stage);
+          // v2 timeline: map backend stages to macro stages
+          if (stage === "planning") {
+            s.setMacroStageStatus("plan", "in_progress");
+            s.setCurrentActivity(msg || "Planning...");
+          } else if (stage === "executing") {
+            s.setMacroStageStatus("research", "in_progress");
+            s.setCurrentActivity(msg || "Researching...");
+          } else if (stage === "evaluating") {
+            s.setMacroStageStatus("research", "completed");
+            s.setMacroStageStatus("evaluate", "in_progress");
+            s.setCurrentActivity(msg || "Evaluating...");
+          } else if (stage === "replanning") {
+            s.setMacroStageStatus("evaluate", "completed");
+            s.setCurrentActivity(msg || "Replanning...");
+          } else if (stage === "synthesizing") {
+            s.setMacroStageStatus("evaluate", "completed");
+            s.setMacroStageStatus("write", "in_progress");
+            s.setCurrentActivity(msg || "Writing report...");
+          }
+        } else if (type === "activity") {
+          const actType = (event.activity_type as string) || "thinking";
+          const label = (event.label as string) || "Working...";
+          s.pushActivity({ type: actType as any, label, status: "active" });
+          // v2 timeline: update current activity + sub-question status
+          if (actType !== "done") {
+            s.setCurrentActivity(label);
+          }
+          const sqIdx = event.sq_index as number | undefined;
+          if (sqIdx !== undefined && actType !== "done") {
+            s.updateSubQuestion(sqIdx, { status: "in_progress", startedAt: Date.now() });
+          }
         } else if (type === "progress") {
           if (event.sources_found !== undefined) s.setSourcesFound(event.sources_found as number);
           if (event.sources_selected !== undefined) s.setSourcesSelected(event.sources_selected as number);
           if (event.message) s.setStageMessage(event.message as string);
-          // Sub-questions from planning phase — show as sections preview
           if (event.sub_questions) {
             const qs = event.sub_questions as { id: string; question: string }[];
             s.initSectionsProgress(qs.map((q) => q.question));
+            // v2 timeline: init sub-questions and transition plan→complete
+            s.initSubQuestions(qs);
+            s.setMacroStageStatus("plan", "completed");
+            s.setPlanSummary(`Generated ${qs.length} research questions`);
           }
-          // Sub-reports from execution phase — mark completed
+          if (event.supplementary_questions) {
+            const qs = event.supplementary_questions as { id: string; question: string }[];
+            s.appendSubQuestions(qs);
+            s.setMacroStageStatus("research", "in_progress");
+          }
           if (event.sub_reports_summary) {
             const reports = event.sub_reports_summary as { sub_question_id: string; confidence: number; question: string }[];
             reports.forEach((_, i) => s.setSectionStatus(i, "done"));
+          }
+          // Per sub-question progress from execute node
+          if (event.sq_index !== undefined && event.confidence !== undefined) {
+            const idx = event.sq_index as number;
+            const confidence = event.confidence as number;
+            const durationMs = event.duration_ms as number | undefined;
+            const error = event.error as string | undefined;
+            s.setSectionStatus(idx, "done");
+            // v2 timeline: update sub-question with final status
+            s.updateSubQuestion(idx, {
+              status: confidence > 0 && !error ? "completed" : "failed",
+              confidence,
+              durationMs,
+            });
+          }
+        } else if (type === "synthesize_outline") {
+          const headings = event.section_headings as string[];
+          const title = event.title as string;
+          if (title) s.setGeneratedTitle(title);
+          if (headings) {
+            s.initSectionsProgress(headings);
+            s.initSectionsV2(headings);
+          }
+          s.setCurrentActivity("Writing report sections...");
+        } else if (type === "synthesize_section") {
+          const idx = event.section_index as number;
+          const sectionStatus = event.status as string;
+          const secTitle = event.section_title as string | undefined;
+          const durationMs = event.duration_ms as number | undefined;
+          if (sectionStatus === "writing") {
+            s.setSectionStatus(idx, "drafting");
+            s.setSectionV2Status(idx, "drafting");
+            if (secTitle) s.setCurrentActivity(`Writing: ${secTitle}`);
+          } else if (sectionStatus === "done") {
+            s.setSectionStatus(idx, "done");
+            s.setSectionV2Status(idx, "done", durationMs);
+          } else if (sectionStatus === "failed") {
+            s.setSectionStatus(idx, "done");
+            s.setSectionV2Status(idx, "failed");
           }
         } else if (type === "sections_outline") {
           const titles = event.titles as string[];
@@ -273,7 +346,7 @@ function InputForm({ workspaceId }: { workspaceId: string }) {
           // Create or use existing deliverable
           let delId = input.targetDeliverableId;
           if (!delId) {
-            const title = res.generated_title || input.topic || "Deep Research Brief";
+            const title = res.generated_title || "Deep Research Brief";
             const newDel = createDeliverable(workspaceId, "deep_research", title);
             delId = newDel.id;
             s.setCreatedDeliverableId(delId);
@@ -308,6 +381,8 @@ function InputForm({ workspaceId }: { workspaceId: string }) {
           }
 
           s.setResult(res);
+          s.setMacroStageStatus("write", "completed");
+          s.setCurrentActivity(null);
 
           // Auto-navigate to the deliverable
           const finalDelId = s.createdDeliverableId ?? delId;
@@ -505,8 +580,8 @@ function ResultSummary({ result, workspaceId }: { result: DeepResearchRunResult;
   const { setActiveDeliverable } = useDeliverableStore();
   const { reset } = useDeepResearchStore();
 
-  const draftedCount = result.section_updates.filter((u) => u.generated_content.trim()).length;
-  const skippedCount = result.section_updates.filter((u) => !u.generated_content.trim()).length;
+  const draftedCount = (result.section_updates ?? []).filter((u) => u.generated_content.trim()).length;
+  const skippedCount = (result.section_updates ?? []).filter((u) => !u.generated_content.trim()).length;
 
   const handleOpenDeliverable = () => {
     if (createdDeliverableId) {
@@ -532,15 +607,15 @@ function ResultSummary({ result, workspaceId }: { result: DeepResearchRunResult;
       <StatGrid stats={[
         { label: "Sections drafted", value: draftedCount },
         { label: "Sections skipped", value: skippedCount },
-        { label: "Sources used", value: result.selected_source_ids.length },
-        { label: "Sources discovered", value: result.discovered_sources.length },
+        { label: "Sources used", value: (result.selected_source_ids ?? []).length },
+        { label: "Sources discovered", value: (result.discovered_sources ?? []).length },
       ]} />
 
-      {result.discovered_sources.length > 0 && (
+      {(result.discovered_sources ?? []).length > 0 && (
         <div>
           <h4 className="text-xs font-medium text-surface-600 mb-1.5">Discovered sources saved</h4>
           <div className="space-y-1">
-            {result.discovered_sources.map((s, i) => (
+            {(result.discovered_sources ?? []).map((s, i) => (
               <div key={i} className="text-xs text-surface-600 bg-white border border-surface-200 rounded px-2.5 py-1.5 flex items-center gap-2">
                 <span className="text-[10px] text-surface-400 shrink-0">{s.provider}</span>
                 <span className="truncate">{s.title}</span>
@@ -551,18 +626,18 @@ function ResultSummary({ result, workspaceId }: { result: DeepResearchRunResult;
         </div>
       )}
 
-      {result.unresolved_questions.length > 0 && (
+      {(result.unresolved_questions ?? []).length > 0 && (
         <div>
           <h4 className="text-xs font-medium text-surface-600 mb-1">Open questions identified</h4>
           <p className="text-[11px] text-surface-400 mb-1.5">
             The following gaps or uncertainties were found during research.
-            {result.follow_up_items.length > 0 && (
+            {(result.follow_up_items ?? []).length > 0 && (
               <> The most actionable ones were promoted to your Agenda.</>
             )}
           </p>
           <div className="space-y-1">
-            {result.unresolved_questions.map((q, i) => {
-              const promoted = result.follow_up_items.some(
+            {(result.unresolved_questions ?? []).map((q, i) => {
+              const promoted = (result.follow_up_items ?? []).some(
                 (f) => f.title.toLowerCase().includes(q.slice(0, 30).toLowerCase()) ||
                        q.toLowerCase().includes(f.title.slice(0, 30).toLowerCase())
               );
@@ -582,16 +657,16 @@ function ResultSummary({ result, workspaceId }: { result: DeepResearchRunResult;
         </div>
       )}
 
-      {result.follow_up_items.length > 0 && (
+      {(result.follow_up_items ?? []).length > 0 && (
         <div>
           <h4 className="text-xs font-medium text-surface-600 mb-1">
             Follow-up agenda items added
             <span className="text-[10px] text-surface-400 font-normal ml-1">
-              ({Math.min(result.follow_up_items.length, 5)} of {result.unresolved_questions.length} questions)
+              ({Math.min((result.follow_up_items ?? []).length, 5)} of {(result.unresolved_questions ?? []).length} questions)
             </span>
           </h4>
           <div className="space-y-1">
-            {result.follow_up_items.slice(0, 5).map((item, i) => (
+            {(result.follow_up_items ?? []).slice(0, 5).map((item, i) => (
               <div key={i} className="text-xs text-surface-600 bg-accent-50 border border-accent-200 rounded px-2.5 py-1.5">
                 <span className="font-medium">{item.title}</span>
                 {item.description && (

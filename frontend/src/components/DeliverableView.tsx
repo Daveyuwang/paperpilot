@@ -718,8 +718,8 @@ function PreviewPanel({
       {showDiff && isReplacement ? (
         <DiffView oldText={section.content} newText={preview.generatedContent} />
       ) : (
-        <div className="px-3 py-3 text-sm text-surface-700 leading-relaxed whitespace-pre-wrap max-h-64 overflow-y-auto">
-          {preview.generatedContent}
+        <div className="px-3 py-3 text-sm text-surface-700 leading-relaxed max-h-64 overflow-y-auto">
+          <MarkdownRenderer content={preview.generatedContent} />
         </div>
       )}
 
@@ -883,7 +883,8 @@ function SectionContentEditor({
     return (
       <div
         onClick={() => setEditing(true)}
-        className="min-h-[120px] text-sm text-surface-700 leading-relaxed cursor-text hover:bg-surface-50 rounded-lg px-1 py-1 -mx-1 transition-colors"
+        className="min-h-[120px] text-sm leading-relaxed cursor-text hover:bg-surface-50 rounded-lg px-1 py-1 -mx-1 transition-colors"
+        style={{ color: '#3d3830' }}
         title="Click to edit"
       >
         <MarkdownRenderer content={value} />

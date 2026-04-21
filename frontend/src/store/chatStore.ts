@@ -35,6 +35,12 @@ interface ChatState {
   currentMode: string;
   currentScopeLabel: string;
 
+  // Edit + resubmit
+  editingMessageId: string | null;
+  setEditingMessageId: (id: string | null) => void;
+  updateMessageContent: (id: string, content: string) => void;
+  resubmitFrom: (id: string, newContent: string) => void;
+
   // Actions
   switchToSession: (newSessionId: string, coveredIds?: string[]) => void;
   clearSession: (sessionId: string) => void;
@@ -76,6 +82,25 @@ export const useChatStore = create<ChatState>()(
       suggestedQuestions: [],
       currentMode: "paper_understanding",
       currentScopeLabel: "Using this paper",
+      editingMessageId: null,
+
+      setEditingMessageId: (id) => set({ editingMessageId: id }),
+
+      updateMessageContent: (id, content) =>
+        set((s) => ({
+          messages: s.messages.map((m) =>
+            m.id === id ? { ...m, content } : m
+          ),
+        })),
+
+      resubmitFrom: (id, newContent) =>
+        set((s) => {
+          const idx = s.messages.findIndex((m) => m.id === id);
+          if (idx === -1) return s;
+          const trimmed = s.messages.slice(0, idx + 1);
+          trimmed[idx] = { ...trimmed[idx], content: newContent };
+          return { messages: trimmed, editingMessageId: null };
+        }),
 
       switchToSession: (newSessionId, coveredIds = []) =>
         set((s) => {
@@ -308,6 +333,9 @@ export const useChatStore = create<ChatState>()(
       discardPartial: (id) =>
         set((s) => ({
           messages: s.messages.filter((m) => m.id !== id),
+          isGenerating: false,
+          statusText: "",
+          activeQuestionId: null,
         })),
 
       setSuggestedQuestions: (qs) => set({ suggestedQuestions: qs }),
@@ -335,7 +363,9 @@ export const useChatStore = create<ChatState>()(
           suggestedQuestions: [],
           currentMode: "paper_understanding",
           currentScopeLabel: "Using this paper",
+          editingMessageId: null,
         }),
+
     }),
     {
       name: "paperpilot-chat",

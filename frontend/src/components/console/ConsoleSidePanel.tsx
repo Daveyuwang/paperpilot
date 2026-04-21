@@ -12,14 +12,15 @@ const TABS: { id: ConsolePanelTab; label: string; icon: typeof FileText }[] = [
 interface Props {
   workspaceId: string;
   onDraftRequest?: (sectionTitle: string) => void;
+  onFillInput?: (text: string) => void;
 }
 
-export function ConsoleSidePanel({ workspaceId, onDraftRequest }: Props) {
+export function ConsoleSidePanel({ workspaceId, onDraftRequest, onFillInput }: Props) {
   const { consolePanelTab, setConsolePanelTab, setConsolePanelOpen } = useWorkspaceStore();
 
   return (
     <div className="flex flex-col h-full bg-white border-l border-surface-200">
-      {/* Header with tabs */}
+      {/* Header with tabs + collapse */}
       <div className="flex-shrink-0 flex items-center justify-between px-2 py-1.5 border-b border-surface-200 bg-surface-50">
         <div className="flex items-center gap-0.5">
           {TABS.map((tab) => {
@@ -44,7 +45,7 @@ export function ConsoleSidePanel({ workspaceId, onDraftRequest }: Props) {
         <button
           onClick={() => setConsolePanelOpen(false)}
           className="p-1 rounded hover:bg-surface-100 text-surface-400 hover:text-surface-600 transition-colors"
-          title="Close panel"
+          title="Collapse panel"
         >
           <PanelRightClose className="w-3.5 h-3.5" />
         </button>
@@ -53,10 +54,14 @@ export function ConsoleSidePanel({ workspaceId, onDraftRequest }: Props) {
       {/* Content */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {consolePanelTab === "deliverable" && (
-          <MiniDeliverableView workspaceId={workspaceId} onDraftRequest={onDraftRequest} />
+          <MiniDeliverableView
+            workspaceId={workspaceId}
+            onDraftRequest={onDraftRequest}
+            onFillInput={onFillInput}
+          />
         )}
         {consolePanelTab === "sources" && (
-          <MiniSourcesView workspaceId={workspaceId} />
+          <MiniSourcesView workspaceId={workspaceId} onFillInput={onFillInput} />
         )}
       </div>
     </div>

@@ -294,6 +294,16 @@ async def run_deep_research(
             message="Research completed but produced no report.",
         )
 
+    # Detect all-failed: no sections and no sources means nothing worked
+    if not report.sections and not report.sources:
+        return DeepResearchRunResult(
+            run_id=run_id, status="failed",
+            message=(
+                "All research sub-questions failed. "
+                "Please check your Tavily API key and network connectivity."
+            ),
+        )
+
     return _report_to_result(report, run_id)
 
 
@@ -352,6 +362,7 @@ async def run_deep_research_stream(
 
             current_node = None
             final_report = None
+            last_event_time = asyncio.get_event_loop().time()
 
             async for event in compiled_graph.astream_events(
                 initial_state, version="v2"
@@ -359,6 +370,10 @@ async def run_deep_research_stream(
                 kind = event.get("event", "")
                 name = event.get("name", "")
                 data = event.get("data", {})
+
+                now = asyncio.get_event_loop().time()
+
+                # ── Node lifecycle events ──────────────────────────
 
                 if kind == "on_chain_start" and name in (
                     "plan", "execute", "replan", "synthesize", "evaluate"
@@ -369,10 +384,125 @@ async def run_deep_research_stream(
                         "execute": ("executing", "Investigating sub-questions..."),
                         "evaluate": ("evaluating", "Evaluating research quality..."),
                         "replan": ("replanning", "Generating supplementary questions..."),
-                        "synthesize": ("synthesizing", "Producing final report..."),
+                        "synthesize": ("synthesizing", "Writing report..."),
                     }
                     stage, msg = stage_map.get(name, (name, f"Running {name}..."))
                     yield emit("stage", {"stage": stage, "message": msg})
+                    last_event_time = now
+
+                # ── Custom events from nodes (dispatch_custom_event) ──
+
+                elif kind == "on_custom_event" and name == "execute_progress":
+                    ep = data
+                    evt = ep.get("event", "")
+                    msg = ep.get("message", "")
+
+                    if evt == "sq_start":
+                        yield emit("activity", {
+                            "activity_type": "thinking",
+                            "label": msg,
+                            "sq_index": ep.get("sq_index"),
+                            "sq_total": ep.get("sq_total"),
+                        })
+                    elif evt == "searching":
+                        yield emit("activity", {
+                            "activity_type": "searching",
+                            "label": msg,
+                            "sq_index": ep.get("sq_index"),
+                        })
+                    elif evt == "reading":
+                        yield emit("activity", {
+                            "activity_type": "reading",
+                            "label": msg,
+                            "sq_index": ep.get("sq_index"),
+                            "results_count": ep.get("results_count"),
+                        })
+                    elif evt == "summarizing":
+                        yield emit("activity", {
+                            "activity_type": "thinking",
+                            "label": msg,
+                            "sq_index": ep.get("sq_index"),
+                        })
+                    elif evt == "sq_complete":
+                        yield emit("activity", {
+                            "activity_type": "done",
+                            "label": msg,
+                            "sq_index": ep.get("sq_index"),
+                            "confidence": ep.get("confidence"),
+                        })
+                        yield emit("progress", {
+                            "sq_index": ep.get("sq_index"),
+                            "sq_total": ep.get("sq_total"),
+                            "confidence": ep.get("confidence"),
+                            "question": ep.get("question"),
+                            "duration_ms": ep.get("duration_ms"),
+                            "error": ep.get("error"),
+                        })
+                    last_event_time = now
+
+                elif kind == "on_custom_event" and name == "synthesize_progress":
+                    sp = data
+                    phase = sp.get("phase", "")
+                    status = sp.get("status", "")
+                    msg = sp.get("message", "")
+
+                    if phase == "outline" and status == "start":
+                        yield emit("activity", {
+                            "activity_type": "thinking",
+                            "label": msg,
+                        })
+                    elif phase == "outline" and status == "done":
+                        headings = sp.get("section_headings", [])
+                        yield emit("activity", {
+                            "activity_type": "done",
+                            "label": msg,
+                        })
+                        yield emit("synthesize_outline", {
+                            "title": sp.get("title", ""),
+                            "section_headings": headings,
+                        })
+                    elif phase == "section" and status == "start":
+                        yield emit("activity", {
+                            "activity_type": "writing",
+                            "label": msg,
+                            "section_index": sp.get("section_index"),
+                            "section_total": sp.get("section_total"),
+                            "section_title": sp.get("section_title"),
+                        })
+                        yield emit("synthesize_section", {
+                            "status": "writing",
+                            "section_index": sp.get("section_index"),
+                            "section_total": sp.get("section_total"),
+                            "section_title": sp.get("section_title"),
+                        })
+                    elif phase == "section" and status in ("done", "failed"):
+                        yield emit("activity", {
+                            "activity_type": "done" if status == "done" else "error",
+                            "label": msg,
+                            "section_index": sp.get("section_index"),
+                            "duration_ms": sp.get("duration_ms"),
+                        })
+                        yield emit("synthesize_section", {
+                            "status": status,
+                            "section_index": sp.get("section_index"),
+                            "section_total": sp.get("section_total"),
+                            "section_title": sp.get("section_title"),
+                            "duration_ms": sp.get("duration_ms"),
+                        })
+                    last_event_time = now
+
+                # ── Tool events (legacy search events) ──
+
+                elif kind == "on_tool_start":
+                    tool_input = data.get("input", {})
+                    query = ""
+                    if isinstance(tool_input, dict):
+                        query = tool_input.get("query", "") or tool_input.get("q", "")
+                    if query:
+                        yield emit("activity", {"activity_type": "searching", "label": f"Searching: {str(query)[:60]}"})
+                    last_event_time = now
+
+                # ── Node completion events ──
 
                 elif kind == "on_chain_end" and name == "plan":
                     output = data.get("output", {})
@@ -386,6 +516,7 @@ async def run_deep_research_stream(
                             ],
                             "message": f"Generated {len(sub_qs)} sub-questions",
                         })
+                    last_event_time = now
 
                 elif kind == "on_chain_end" and name == "execute":
                     output = data.get("output", {})
@@ -403,6 +534,7 @@ async def run_deep_research_stream(
                             ],
                             "message": f"Completed {len(reports)} sub-investigations",
                         })
+                    last_event_time = now
 
                 elif kind == "on_chain_end" and name == "replan":
                     output = data.get("output", {})
@@ -416,43 +548,58 @@ async def run_deep_research_stream(
                             ],
                             "message": f"Added {len(new_qs)} supplementary questions",
                         })
+                    last_event_time = now
 
                 elif kind == "on_chain_end" and name == "synthesize":
                     output = data.get("output", {})
                     final_report = output.get("final_report")
+                    last_event_time = now
 
             if final_report:
-                result = _report_to_result(final_report, run_id)
-                yield emit("tailored_outline", {
-                    "generated_title": result.generated_title,
-                    "sections": result.generated_outline or [],
-                })
-                yield emit("sections_outline", {
-                    "titles": result.generated_outline or [],
-                })
-                for update in result.section_updates:
-                    yield emit("section_complete", {
-                        "index": update.section_index,
-                        "title": update.title,
-                        "preview": update.generated_content[:200] + ("..." if len(update.generated_content) > 200 else ""),
-                        "source_count": len(update.source_ids_used),
-                        "skipped": False,
+                # Detect all-failed: no sections and no sources means nothing worked
+                is_empty = not final_report.sections and not final_report.sources
+                if is_empty:
+                    yield emit("result", {
+                        "status": "failed", "run_id": run_id,
+                        "message": (
+                            "All research sub-questions failed. "
+                            "This usually means the search service is unavailable "
+                            "or the API key is not configured. "
+                            "Please check your Tavily API key and network connectivity."
+                        ),
                     })
-
-                yield emit("result", {
-                    "status": "completed", "run_id": run_id,
-                    "data": {
-                        "section_updates": [u.model_dump() for u in result.section_updates],
-                        "discovered_sources": [],
-                        "saved_source_ids": [],
-                        "selected_source_ids": result.selected_source_ids,
-                        "unresolved_questions": result.unresolved_questions,
-                        "follow_up_items": [f.model_dump() for f in result.follow_up_items],
-                        "summary": result.summary,
+                else:
+                    result = _report_to_result(final_report, run_id)
+                    yield emit("tailored_outline", {
                         "generated_title": result.generated_title,
-                        "generated_outline": result.generated_outline,
-                    },
-                })
+                        "sections": result.generated_outline or [],
+                    })
+                    yield emit("sections_outline", {
+                        "titles": result.generated_outline or [],
+                    })
+                    for update in result.section_updates:
+                        yield emit("section_complete", {
+                            "index": update.section_index,
+                            "title": update.title,
+                            "preview": update.generated_content[:200] + ("..." if len(update.generated_content) > 200 else ""),
+                            "source_count": len(update.source_ids_used),
+                            "skipped": False,
+                        })
+
+                    yield emit("result", {
+                        "status": "completed", "run_id": run_id,
+                        "data": {
+                            "section_updates": [u.model_dump() for u in result.section_updates],
+                            "discovered_sources": [],
+                            "saved_source_ids": [],
+                            "selected_source_ids": result.selected_source_ids,
+                            "unresolved_questions": result.unresolved_questions,
+                            "follow_up_items": [f.model_dump() for f in result.follow_up_items],
+                            "summary": result.summary,
+                            "generated_title": result.generated_title,
+                            "generated_outline": result.generated_outline,
+                        },
+                    })
             else:
                 yield emit("result", {
                     "status": "failed", "run_id": run_id,

@@ -33,7 +33,7 @@ async def _stream_llm_answer(
         async for token in llm.stream_text(
             system=system,
             messages=[{"role": "user", "content": question}],
-            max_tokens=1500,
+            max_tokens=2500,
             temperature=0.3,
         ):
             full_text += token
@@ -42,9 +42,13 @@ async def _stream_llm_answer(
         logger.exception("console_stream_failed", error=str(exc))
         if full_text:
             yield {"type": "answer_json", "content": _answer_json(full_text, intent, scope_label)}
+            yield {"type": "answer_done", "content": ""}
         else:
             yield {"type": "error", "content": f"Failed to generate response: {str(exc)}"}
-            return
+        return
+
+    if not full_text.strip():
+        full_text = "I wasn't able to generate a response. Could you rephrase your question?"
 
     yield {"type": "answer_json", "content": _answer_json(full_text, intent, scope_label)}
     yield {"type": "answer_done", "content": ""}
@@ -144,21 +148,38 @@ def _status_for_intent(intent: str) -> str:
 
 
 def _build_system_prompt(intent: str, ctx: dict) -> str:
+    sources = ctx.get("included_sources", [])
+    source_context = ""
+    if sources:
+        source_lines = []
+        for s in sources[:15]:
+            line = f"- {s.get('title', 'Untitled')}"
+            if s.get('authors'):
+                authors = s['authors'][:3]
+                line += f" ({', '.join(authors)})"
+            if s.get('year'):
+                line += f" [{s['year']}]"
+            source_lines.append(line)
+        source_context = f"\n\nUser's workspace sources ({len(sources)} included):\n" + "\n".join(source_lines)
+
     base = (
         "You are a research assistant in PaperPilot, helping a scholar with their research workspace. "
         "Be concise, actionable, and grounded in research methodology. "
-        "Use markdown formatting for structure when helpful."
+        "Use markdown formatting: headings, bullet lists, numbered lists, bold for emphasis. "
+        "Always provide a substantive answer. Never ask for clarification unless the question is truly ambiguous. "
+        "If the user's request is broad, make reasonable assumptions and provide useful content directly."
+        f"{source_context}"
     )
 
     if intent == "discover_sources":
         return (
             f"{base}\n\n"
-            "The user wants to find relevant academic sources. Help them by:\n"
-            "1. Suggesting specific search queries they could use\n"
-            "2. Recommending types of sources to look for (surveys, seminal papers, recent work)\n"
-            "3. Suggesting related keywords, authors, or venues\n"
-            "4. If they mention a topic, suggest 3-5 specific search strategies\n\n"
-            "Remind them they can use the Sources panel to search OpenAlex and arXiv directly."
+            "The user wants to find relevant academic sources. Provide:\n"
+            "1. A curated list of 5-8 specific papers/topics they should look for, with brief relevance explanations\n"
+            "2. Concrete search queries they can use (formatted as bullet points)\n"
+            "3. Key authors or research groups in this area\n"
+            "4. Suggested venues (conferences, journals)\n\n"
+            "Be specific and actionable. Don't ask what their topic is — infer it from their question and workspace context."
         )
 
     if intent == "compare_sources":
@@ -231,9 +252,9 @@ def _build_system_prompt(intent: str, ctx: dict) -> str:
                 deliverable_info += f"\n  • {s.get('title', '')} [{s.get('status', 'empty')}]"
     return (
         f"{base}\n\n"
-        "Answer their research question concisely and helpfully. Focus on:\n"
-        "- Actionable research guidance\n"
-        "- Clear methodology explanations\n"
-        "- Specific, well-structured answers\n"
-        f"- Suggesting relevant next steps{deliverable_info}"
+        "Answer their research question directly and substantively. Use:\n"
+        "- Structured markdown (headings, lists, bold) for readability\n"
+        "- Specific examples and concrete suggestions\n"
+        "- References to their workspace sources when relevant\n"
+        f"- Actionable next steps{deliverable_info}"
     )

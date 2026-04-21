@@ -13,18 +13,10 @@ import { usePaperStore } from "@/store/paperStore";
 import { api } from "@/api/client";
 import { TaskPageShell } from "./shared/TaskPageShell";
 import { WorkflowError } from "./shared/WorkflowError";
-import { WorkflowRunPanel } from "./shared/WorkflowRunPanel";
+import { VerticalTimeline } from "./DeepResearchProgress/VerticalTimeline";
 import { StatGrid } from "./shared/StatGrid";
 import { ClarificationPanel } from "./shared/ClarificationPanel";
 import type { ProposalPlanMode, ProposalPlanRunResult, ClarificationQuestion, DeliverableType } from "@/types";
-
-const PP_STAGES = [
-  { key: "validating", label: "Validating input" },
-  { key: "selecting_context", label: "Selecting context" },
-  { key: "generating_outline", label: "Generating outline" },
-  { key: "drafting", label: "Drafting sections" },
-  { key: "updating_agenda", label: "Updating agenda" },
-];
 
 export function ProposalPlanView() {
   const store = useProposalPlanStore();
@@ -73,24 +65,38 @@ export function ProposalPlanView() {
 /* ── Live progress (SSE-driven) ─────────────────────────────────────────── */
 
 function PPLiveProgress() {
-  const { status, currentStageMessage, sectionsProgress, sourcesSelected } = useProposalPlanStore();
+  const {
+    generatedTitle,
+    macroStages, sectionsProgressV2, currentActivity,
+  } = useProposalPlanStore();
 
   return (
-    <WorkflowRunPanel
-      stages={PP_STAGES}
-      currentStatus={status}
-      stageMessage={currentStageMessage}
-      sectionsProgress={sectionsProgress}
-      sourcesSelected={sourcesSelected}
-    />
+    <div className="space-y-3">
+      {generatedTitle && (
+        <div className="text-sm font-medium text-surface-700 px-1">
+          {generatedTitle}
+        </div>
+      )}
+      <VerticalTimeline
+        macroStages={macroStages}
+        subQuestions={[]}
+        sectionsProgress={sectionsProgressV2}
+        planSummary={null}
+        currentActivity={currentActivity}
+        generatedTitle={generatedTitle}
+      />
+    </div>
   );
 }
 
 /* ── Interrupted state ─────────────────────────────────────────────────── */
 
 function PPInterruptedState() {
-  const { currentStageMessage, sectionsProgress, input, reset } = useProposalPlanStore();
-  const completedSections = sectionsProgress.filter((s) => s.status === "done").length;
+  const { currentStageMessage, sectionsProgress, sectionsProgressV2, generatedTitle, input, reset } = useProposalPlanStore();
+  const completedSections = sectionsProgressV2.length > 0
+    ? sectionsProgressV2.filter((s) => s.status === "done").length
+    : sectionsProgress.filter((s) => s.status === "done").length;
+  const totalSections = sectionsProgressV2.length > 0 ? sectionsProgressV2.length : sectionsProgress.length;
 
   return (
     <div className="space-y-4">
@@ -104,15 +110,18 @@ function PPInterruptedState() {
         </div>
       </div>
 
-      {(currentStageMessage || completedSections > 0) && (
+      {(generatedTitle || currentStageMessage || completedSections > 0) && (
         <div className="px-4 py-3 rounded-lg bg-surface-50 border border-surface-200 space-y-2">
           <p className="text-xs font-medium text-surface-600">Last known progress:</p>
+          {generatedTitle && (
+            <p className="text-xs text-surface-700">Title: {generatedTitle}</p>
+          )}
           {currentStageMessage && (
             <p className="text-xs text-surface-500">Stage: {currentStageMessage}</p>
           )}
           {completedSections > 0 && (
             <p className="text-xs text-surface-500">
-              {completedSections} of {sectionsProgress.length} sections drafted
+              {completedSections} of {totalSections} sections drafted
             </p>
           )}
         </div>
@@ -218,27 +227,61 @@ function InputForm({ workspaceId }: { workspaceId: string }) {
           const msg = event.message as string | undefined;
           s.setStatus(stage as PPStatus);
           if (msg) s.setStageMessage(msg);
+          s.pushStage(stage, msg || stage);
+          // v2 timeline
+          if (stage === "validating" || stage === "selecting_context") {
+            s.setMacroStageStatus("context", "in_progress");
+            s.setCurrentActivity(msg || "Preparing context...");
+          } else if (stage === "generating_outline") {
+            s.setMacroStageStatus("context", "completed");
+            s.setMacroStageStatus("draft", "in_progress");
+            s.setCurrentActivity(msg || "Generating outline...");
+          } else if (stage === "drafting") {
+            s.setCurrentActivity(msg || "Drafting sections...");
+          } else if (stage === "updating_agenda") {
+            s.setMacroStageStatus("draft", "completed");
+            s.setMacroStageStatus("finalize", "in_progress");
+            s.setCurrentActivity(msg || "Analyzing gaps...");
+          }
+        } else if (type === "activity") {
+          const actType = (event.activity_type as string) || "thinking";
+          const label = (event.label as string) || "";
+          if (label) {
+            s.pushActivity({ type: actType as any, label, status: "active" });
+            s.setCurrentActivity(label);
+          }
         } else if (type === "progress") {
           if (event.sources_selected !== undefined) s.setSourcesSelected(event.sources_selected as number);
         } else if (type === "sections_outline") {
           const titles = event.titles as string[];
-          if (titles) s.initSectionsProgress(titles);
+          if (titles) {
+            s.initSectionsProgress(titles);
+            s.initSectionsV2(titles);
+          }
         } else if (type === "tailored_outline") {
           const genTitle = event.generated_title as string | undefined;
           const sections = event.sections as string[] | undefined;
           if (genTitle) s.setGeneratedTitle(genTitle);
-          if (sections) s.initSectionsProgress(sections);
+          if (sections) {
+            s.initSectionsProgress(sections);
+            s.initSectionsV2(sections);
+          }
         } else if (type === "section_start") {
           const idx = event.index as number;
+          const title = event.title as string | undefined;
           s.setSectionStatus(idx, "drafting");
+          s.setSectionV2Status(idx, "drafting");
+          if (title) s.setCurrentActivity(`Drafting: ${title}`);
         } else if (type === "section_complete") {
           const idx = event.index as number;
           const skipped = event.skipped as boolean;
           if (skipped) {
             s.setSectionStatus(idx, "skipped");
+            s.setSectionV2Status(idx, "done");
           } else {
             const preview = event.preview as string | undefined;
             s.setSectionStatus(idx, "done", preview);
+            s.setSectionV2Status(idx, "done");
           }
         } else if (type === "result") {
           const status = event.status as string;
@@ -250,10 +293,19 @@ function InputForm({ workspaceId }: { workspaceId: string }) {
           }
           if (status === "failed") {
             s.setFailed((event.message as string) ?? "Run failed");
+            // Mark current in_progress stage as failed
+            for (const ms of s.macroStages) {
+              if (ms.status === "in_progress") {
+                s.setMacroStageStatus(ms.key, "failed");
+                break;
+              }
+            }
+            s.setCurrentActivity(null);
             return;
           }
           if (status === "blocked") {
             s.setBlocked((event.message as string) ?? "Blocked");
+            s.setCurrentActivity(null);
             return;
           }
 
@@ -304,6 +356,8 @@ function InputForm({ workspaceId }: { workspaceId: string }) {
           }
 
           s.setResult(res);
+          s.setMacroStageStatus("finalize", "completed");
+          s.setCurrentActivity(null);
 
           // Auto-navigate to deliverable
           const finalDelId = s.createdDeliverableId ?? deliverable?.id;
@@ -621,25 +675,25 @@ function ResultSummary({ result, workspaceId, onReset }: {
 
       <StatGrid
         stats={[
-          { label: "Sections drafted", value: result.updated_section_ids.length },
-          { label: "Skipped", value: result.skipped_section_ids.length },
-          { label: "Sources used", value: result.selected_source_ids.length },
+          { label: "Sections drafted", value: (result.updated_section_ids ?? []).length },
+          { label: "Skipped", value: (result.skipped_section_ids ?? []).length },
+          { label: "Sources used", value: (result.selected_source_ids ?? []).length },
         ]}
         columns={3}
       />
 
-      {result.unresolved_questions.length > 0 && (
+      {(result.unresolved_questions ?? []).length > 0 && (
         <div>
           <h4 className="text-xs font-medium text-surface-600 mb-1">Open questions identified</h4>
           <p className="text-[11px] text-surface-400 mb-1.5">
             Gaps or uncertainties found during drafting.
-            {result.follow_up_items.length > 0 && (
+            {(result.follow_up_items ?? []).length > 0 && (
               <> The most actionable ones were added to Agenda.</>
             )}
           </p>
           <ul className="space-y-1">
-            {result.unresolved_questions.map((q, i) => {
-              const promoted = result.follow_up_items.some(
+            {(result.unresolved_questions ?? []).map((q, i) => {
+              const promoted = (result.follow_up_items ?? []).some(
                 (f) => f.title.toLowerCase().includes(q.slice(0, 30).toLowerCase()) ||
                        q.toLowerCase().includes(f.title.slice(0, 30).toLowerCase())
               );
@@ -659,16 +713,16 @@ function ResultSummary({ result, workspaceId, onReset }: {
         </div>
       )}
 
-      {result.follow_up_items.length > 0 && (
+      {(result.follow_up_items ?? []).length > 0 && (
         <div>
           <h4 className="text-xs font-medium text-surface-600 mb-1">
             Follow-up agenda items added
             <span className="text-[10px] text-surface-400 font-normal ml-1">
-              ({result.follow_up_items.length} promoted)
+              ({(result.follow_up_items ?? []).length} promoted)
             </span>
           </h4>
           <div className="space-y-1">
-            {result.follow_up_items.slice(0, 5).map((item, i) => (
+            {(result.follow_up_items ?? []).slice(0, 5).map((item, i) => (
               <div key={i} className="text-xs text-surface-600 bg-accent-50 border border-accent-200 rounded px-2.5 py-1.5">
                 <span className="font-medium">{item.title}</span>
                 {item.description && (

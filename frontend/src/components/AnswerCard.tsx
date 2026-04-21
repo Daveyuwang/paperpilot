@@ -386,6 +386,8 @@ interface AnswerCardProps {
   evidenceCount?: number;
   /** Whether to show the scope badge (default true; pass false while streaming) */
   showScopeBadge?: boolean;
+  /** Console mode: skip structured sections, just render markdown */
+  isConsole?: boolean;
   onCitationClick?: (page: number | null, section?: string | null) => void;
   onOverrideAction?: (actionType: string) => void;
 }
@@ -396,6 +398,7 @@ export default function AnswerCard({
   phase1Complete,
   evidenceCount,
   showScopeBadge = true,
+  isConsole = false,
   onCitationClick,
   onOverrideAction,
 }: AnswerCardProps) {
@@ -419,8 +422,8 @@ export default function AnswerCard({
 
   return (
     <div className="text-sm w-full">
-      {/* Scope badge — only shown after phase1Complete (showScopeBadge=true) */}
-      {showScopeBadge && (
+      {/* Scope badge — only shown for paper QA after phase1Complete */}
+      {showScopeBadge && !isConsole && (
         <ScopeBadge
           label={scopeLabel}
           mode={mode}
@@ -432,61 +435,75 @@ export default function AnswerCard({
       {/* ── Phase 1: stream direct_answer with cursor + skeleton placeholders ── */}
       {isPhase1 && (
         <>
-          <StreamingDirectAnswer text={streamingText!} />
-          <Phase1Skeletons />
+          {isConsole ? (
+            <div className="mb-2">
+              <MarkdownRenderer content={streamingText!} />
+              <span className="inline-block w-0.5 h-[1.1em] bg-accent-500 align-text-bottom ml-0.5 animate-pulse" />
+            </div>
+          ) : (
+            <>
+              <StreamingDirectAnswer text={streamingText!} />
+              <Phase1Skeletons />
+            </>
+          )}
         </>
       )}
 
       {/* ── Phase 2 / static: full answer content ── */}
       {(isPhase2 || (!isPhase1 && directAnswer)) && (
         <>
-          {/* Direct answer (no cursor) */}
+          {/* Direct answer */}
           {directAnswer && (
             <div className="mb-4">
-              <MarkdownRenderer content={directAnswer} className="text-[15px] font-medium" />
+              <MarkdownRenderer content={directAnswer} className={isConsole ? "" : "text-[15px] font-medium"} />
             </div>
           )}
 
-          {/* Key points */}
-          {answer.key_points && answer.key_points.length > 0 && (
-            <FadeInBlock delayMs={0}>
-              <KeyPointsBlock points={answer.key_points} />
-            </FadeInBlock>
-          )}
+          {/* Structured sections — only for paper QA */}
+          {!isConsole && (
+            <>
+              {/* Key points */}
+              {answer.key_points && answer.key_points.length > 0 && (
+                <FadeInBlock delayMs={0}>
+                  <KeyPointsBlock points={answer.key_points} />
+                </FadeInBlock>
+              )}
 
-          {/* Paper context (concept_explanation) */}
-          {mode === "concept_explanation" && answer.paper_context && (
-            <FadeInBlock delayMs={80}>
-              <PaperContextBlock text={answer.paper_context} />
-            </FadeInBlock>
-          )}
+              {/* Paper context (concept_explanation) */}
+              {mode === "concept_explanation" && answer.paper_context && (
+                <FadeInBlock delayMs={80}>
+                  <PaperContextBlock text={answer.paper_context} />
+                </FadeInBlock>
+              )}
 
-          {/* Evidence */}
-          {answer.evidence && answer.evidence.length > 0 && (
-            <FadeInBlock delayMs={isPhase2 ? 100 : 0}>
-              <EvidenceBlock items={answer.evidence} onCitationClick={onCitationClick} />
-            </FadeInBlock>
-          )}
+              {/* Evidence */}
+              {answer.evidence && answer.evidence.length > 0 && (
+                <FadeInBlock delayMs={isPhase2 ? 100 : 0}>
+                  <EvidenceBlock items={answer.evidence} onCitationClick={onCitationClick} />
+                </FadeInBlock>
+              )}
 
-          {/* Uncertainty */}
-          {answer.uncertainty && (
-            <FadeInBlock delayMs={isPhase2 ? 200 : 0}>
-              <UncertaintyBlock text={answer.uncertainty} />
-            </FadeInBlock>
-          )}
+              {/* Uncertainty */}
+              {answer.uncertainty && (
+                <FadeInBlock delayMs={isPhase2 ? 200 : 0}>
+                  <UncertaintyBlock text={answer.uncertainty} />
+                </FadeInBlock>
+              )}
 
-          {/* Plain language */}
-          {answer.plain_language && (
-            <FadeInBlock delayMs={isPhase2 ? 250 : 0}>
-              <PlainLanguageBlock text={answer.plain_language} />
-            </FadeInBlock>
-          )}
+              {/* Plain language */}
+              {answer.plain_language && (
+                <FadeInBlock delayMs={isPhase2 ? 250 : 0}>
+                  <PlainLanguageBlock text={answer.plain_language} />
+                </FadeInBlock>
+              )}
 
-          {/* Bigger picture */}
-          {answer.bigger_picture && (
-            <FadeInBlock delayMs={isPhase2 ? 400 : 0}>
-              <BiggerPictureBlock text={answer.bigger_picture} />
-            </FadeInBlock>
+              {/* Bigger picture */}
+              {answer.bigger_picture && (
+                <FadeInBlock delayMs={isPhase2 ? 400 : 0}>
+                  <BiggerPictureBlock text={answer.bigger_picture} />
+                </FadeInBlock>
+              )}
+            </>
           )}
         </>
       )}

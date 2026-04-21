@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import type { ClarificationQuestion, ProposalPlanRunResult, ProposalPlanMode } from "@/types";
+import type { DynamicStage, ActivityEvent, MacroStage, MacroStageStatus, SectionProgressV2 } from "@/store/deepResearchStore";
 
 export type PPStatus =
   | "idle"
@@ -81,6 +82,15 @@ interface ProposalPlanState {
   sourcesSelected: number;
   generatedTitle: string | null;
 
+  // Dynamic stages + activity
+  dynamicStages: DynamicStage[];
+  activityLog: ActivityEvent[];
+
+  // Timeline v2 (vertical timeline)
+  macroStages: MacroStage[];
+  sectionsProgressV2: SectionProgressV2[];
+  currentActivity: string | null;
+
   setInput: (partial: Partial<ProposalPlanInput>) => void;
   startRun: () => void;
   setStatus: (status: PPStatus) => void;
@@ -95,6 +105,16 @@ interface ProposalPlanState {
   setSectionStatus: (index: number, status: PPSectionProgress["status"], preview?: string) => void;
   setSourcesSelected: (count: number) => void;
   setGeneratedTitle: (title: string) => void;
+  // Dynamic stage actions
+  pushStage: (key: string, label: string) => void;
+  completeCurrentStage: () => void;
+  pushActivity: (event: Omit<ActivityEvent, "id" | "timestamp">) => void;
+  completeActivity: (id: string) => void;
+  // Timeline v2 actions
+  setMacroStageStatus: (key: string, status: MacroStageStatus) => void;
+  setCurrentActivity: (activity: string | null) => void;
+  initSectionsV2: (titles: string[]) => void;
+  setSectionV2Status: (index: number, status: SectionProgressV2["status"], durationMs?: number) => void;
   reset: () => void;
 }
 
@@ -111,6 +131,11 @@ export const useProposalPlanStore = create<ProposalPlanState>()(
       sectionsProgress: [],
       sourcesSelected: 0,
       generatedTitle: null,
+      dynamicStages: [],
+      activityLog: [],
+      macroStages: [],
+      sectionsProgressV2: [],
+      currentActivity: null,
 
       setInput: (partial) => set((s) => ({ input: { ...s.input, ...partial } })),
 
@@ -124,6 +149,15 @@ export const useProposalPlanStore = create<ProposalPlanState>()(
         sectionsProgress: [],
         sourcesSelected: 0,
         generatedTitle: null,
+        dynamicStages: [],
+        activityLog: [],
+        macroStages: [
+          { key: "context", label: "Context", status: "pending" },
+          { key: "draft", label: "Draft", status: "pending" },
+          { key: "finalize", label: "Finalize", status: "pending" },
+        ],
+        sectionsProgressV2: [],
+        currentActivity: null,
       }),
 
       setStatus: (status) => set({ status }),
@@ -157,6 +191,67 @@ export const useProposalPlanStore = create<ProposalPlanState>()(
 
       setGeneratedTitle: (title) => set({ generatedTitle: title }),
 
+      pushStage: (key, label) => set((s) => {
+        const updated = s.dynamicStages.map((st) =>
+          st.status === "active" ? { ...st, status: "completed" as const, completedAt: Date.now() } : st
+        );
+        return {
+          dynamicStages: [...updated, { key, label, status: "active" as const, startedAt: Date.now() }],
+        };
+      }),
+
+      completeCurrentStage: () => set((s) => ({
+        dynamicStages: s.dynamicStages.map((st) =>
+          st.status === "active" ? { ...st, status: "completed" as const, completedAt: Date.now() } : st
+        ),
+      })),
+
+      pushActivity: (event) => set((s) => {
+        const newEvent: ActivityEvent = {
+          ...event,
+          id: `act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          timestamp: Date.now(),
+        };
+        const updated = s.activityLog.map((e) =>
+          e.status === "active" ? { ...e, status: "done" as const } : e
+        );
+        return { activityLog: [...updated.slice(-19), newEvent] };
+      }),
+
+      completeActivity: (id) => set((s) => ({
+        activityLog: s.activityLog.map((e) =>
+          e.id === id ? { ...e, status: "done" as const } : e
+        ),
+      })),
+
+      setMacroStageStatus: (key, status) => set((s) => ({
+        macroStages: s.macroStages.map((stage) => {
+          if (stage.key !== key) return stage;
+          const now = Date.now();
+          return {
+            ...stage,
+            status,
+            ...(status === "in_progress" ? { startedAt: now } : {}),
+            ...(status === "completed" || status === "failed" ? {
+              completedAt: now,
+              durationMs: stage.startedAt ? now - stage.startedAt : undefined,
+            } : {}),
+          };
+        }),
+      })),
+
+      setCurrentActivity: (activity) => set({ currentActivity: activity }),
+
+      initSectionsV2: (titles) => set({
+        sectionsProgressV2: titles.map((title) => ({ title, status: "pending" as const })),
+      }),
+
+      setSectionV2Status: (index, status, durationMs) => set((s) => ({
+        sectionsProgressV2: s.sectionsProgressV2.map((sec, i) =>
+          i === index ? { ...sec, status, ...(durationMs !== undefined ? { durationMs } : {}) } : sec
+        ),
+      })),
+
       reset: () => set({
         status: "idle",
         input: { ...DEFAULT_INPUT },
@@ -168,6 +263,11 @@ export const useProposalPlanStore = create<ProposalPlanState>()(
         sectionsProgress: [],
         sourcesSelected: 0,
         generatedTitle: null,
+        dynamicStages: [],
+        activityLog: [],
+        macroStages: [],
+        sectionsProgressV2: [],
+        currentActivity: null,
       }),
     }),
     {

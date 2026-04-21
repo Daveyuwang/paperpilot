@@ -4,6 +4,7 @@ import asyncio
 import time
 import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from langchain_core.callbacks import adispatch_custom_event
 
 from app.deep_research.config import FETCH_TOP_N
 from app.deep_research.llm_factory import make_llm
@@ -28,12 +29,38 @@ async def _llm_summarize(structured_llm, messages):
 
 async def _execute_single(
     sub_q: SubQuestion,
+    sq_index: int,
+    sq_total: int,
     state: DeepResearchState,
 ) -> tuple[SubReport | None, dict | None]:
     try:
+        t_sq = time.monotonic()
+
+        await adispatch_custom_event("execute_progress", {
+            "event": "sq_start",
+            "sq_index": sq_index, "sq_total": sq_total,
+            "question": sub_q.question,
+            "message": f"Investigating: {sub_q.question[:80]}",
+        })
+
+        await adispatch_custom_event("execute_progress", {
+            "event": "searching",
+            "sq_index": sq_index, "sq_total": sq_total,
+            "queries": sub_q.search_queries[:3],
+            "message": f"Searching: {sub_q.search_queries[0][:60]}",
+        })
+
         search_results = await tavily_search(sub_q.search_queries)
 
         if not search_results:
+            await adispatch_custom_event("execute_progress", {
+                "event": "sq_complete",
+                "sq_index": sq_index, "sq_total": sq_total,
+                "question": sub_q.question,
+                "confidence": 0.0,
+                "duration_ms": round((time.monotonic() - t_sq) * 1000),
+                "message": f"No results: {sub_q.question[:60]}",
+            })
             return SubReport(
                 sub_question_id=sub_q.id,
                 question=sub_q.question,
@@ -43,6 +70,13 @@ async def _execute_single(
                 gaps="Complete lack of search results; unable to investigate this question.",
                 sources=[],
             ), {"query": sub_q.search_queries, "reason": "no_results"}
+
+        await adispatch_custom_event("execute_progress", {
+            "event": "reading",
+            "sq_index": sq_index, "sq_total": sq_total,
+            "results_count": len(search_results),
+            "message": f"Reading {min(FETCH_TOP_N, len(search_results))} sources...",
+        })
 
         top_urls = [r["url"] for r in search_results[:FETCH_TOP_N]]
         fetched = await fetch_pages(top_urls)
@@ -79,6 +113,12 @@ async def _execute_single(
 
         search_context = "\n---\n".join(context_parts)
 
+        await adispatch_custom_event("execute_progress", {
+            "event": "summarizing",
+            "sq_index": sq_index, "sq_total": sq_total,
+            "message": f"Analyzing findings for: {sub_q.question[:60]}",
+        })
+
         user_msg = EXECUTE_USER.format(
             question=sub_q.question,
             search_context=search_context,
@@ -98,6 +138,16 @@ async def _execute_single(
         report.question = sub_q.question
         report.sources = source_refs
 
+        await adispatch_custom_event("execute_progress", {
+            "event": "sq_complete",
+            "sq_index": sq_index, "sq_total": sq_total,
+            "question": sub_q.question,
+            "confidence": report.confidence,
+            "sources_count": len(source_refs),
+            "duration_ms": round((time.monotonic() - t_sq) * 1000),
+            "message": f"Done: {sub_q.question[:60]}",
+        })
+
         logger.info(
             "execute_sub_question_done",
             sub_question_id=sub_q.id,
@@ -111,6 +161,15 @@ async def _execute_single(
             sub_question_id=sub_q.id,
             error=str(exc),
         )
+        await adispatch_custom_event("execute_progress", {
+            "event": "sq_complete",
+            "sq_index": sq_index, "sq_total": sq_total,
+            "question": sub_q.question,
+            "confidence": 0.0,
+            "error": str(exc)[:100],
+            "duration_ms": round((time.monotonic() - t_sq) * 1000),
+            "message": f"Failed: {sub_q.question[:60]}",
+        })
         fallback = SubReport(
             sub_question_id=sub_q.id,
             question=sub_q.question,
@@ -126,8 +185,9 @@ async def _execute_single(
 async def execute_node(state: DeepResearchState) -> dict:
     sub_questions = state["sub_questions"]
     t0 = time.monotonic()
+    sq_total = len(sub_questions)
 
-    tasks = [_execute_single(sq, state) for sq in sub_questions]
+    tasks = [_execute_single(sq, i, sq_total, state) for i, sq in enumerate(sub_questions)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     sub_reports: list[SubReport] = []

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FileText, ChevronRight, Plus, Sparkles, Check, Circle } from "lucide-react";
+import { FileText, ChevronRight, Plus, Sparkles, Check, Circle, BookOpen, FlaskConical, ScrollText, StickyNote } from "lucide-react";
 import clsx from "clsx";
 import { useDeliverableStore } from "@/store/deliverableStore";
 import type { DeliverableSection, DeliverableType } from "@/types";
@@ -11,13 +11,21 @@ const TYPE_LABELS: Record<DeliverableType, string> = {
   notes: "Notes",
 };
 
+const TYPE_ICONS: Record<DeliverableType, typeof BookOpen> = {
+  deep_research: FlaskConical,
+  proposal: ScrollText,
+  research_plan: BookOpen,
+  notes: StickyNote,
+};
+
 interface Props {
   workspaceId: string;
   onDraftRequest?: (sectionTitle: string) => void;
+  onFillInput?: (text: string) => void;
 }
 
-export function MiniDeliverableView({ workspaceId, onDraftRequest }: Props) {
-  const { getDeliverables, createDeliverable, getActiveDeliverable, setActiveDeliverable, getSelectedSectionId, selectSection } = useDeliverableStore();
+export function MiniDeliverableView({ workspaceId, onDraftRequest, onFillInput }: Props) {
+  const { getDeliverables, getActiveDeliverable, setActiveDeliverable, getSelectedSectionId, selectSection } = useDeliverableStore();
   const deliverables = getDeliverables(workspaceId);
   const activeDeliverable = getActiveDeliverable(workspaceId);
   const selectedSectionId = activeDeliverable ? getSelectedSectionId(activeDeliverable.id) : null;
@@ -25,6 +33,9 @@ export function MiniDeliverableView({ workspaceId, onDraftRequest }: Props) {
   if (deliverables.length === 0) {
     return <EmptyDeliverables workspaceId={workspaceId} />;
   }
+
+  const filledCount = activeDeliverable?.sections.filter((s) => s.content.trim().length > 0).length ?? 0;
+  const totalCount = activeDeliverable?.sections.length ?? 0;
 
   return (
     <div className="flex flex-col h-full">
@@ -41,6 +52,17 @@ export function MiniDeliverableView({ workspaceId, onDraftRequest }: Props) {
             </option>
           ))}
         </select>
+        {totalCount > 0 && (
+          <div className="flex items-center gap-2 mt-1.5">
+            <div className="flex-1 h-1 bg-surface-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-emerald-400 rounded-full transition-all duration-300"
+                style={{ width: `${Math.round((filledCount / totalCount) * 100)}%` }}
+              />
+            </div>
+            <span className="text-[10px] text-surface-400 tabular-nums">{filledCount}/{totalCount}</span>
+          </div>
+        )}
       </div>
 
       {/* Section list */}
@@ -53,7 +75,17 @@ export function MiniDeliverableView({ workspaceId, onDraftRequest }: Props) {
                 key={section.id}
                 section={section}
                 isSelected={section.id === selectedSectionId}
-                onSelect={() => selectSection(activeDeliverable.id, section.id)}
+                onSelect={() => {
+                  selectSection(activeDeliverable.id, section.id);
+                  if (onFillInput) {
+                    const hasContent = section.content.trim().length > 0;
+                    onFillInput(
+                      hasContent
+                        ? `Revise the "${section.title}" section`
+                        : `Help me write the "${section.title}" section`
+                    );
+                  }
+                }}
                 onDraft={() => onDraftRequest?.(section.title)}
               />
             ))}
@@ -91,7 +123,7 @@ function SectionRow({
       {hasContent ? (
         <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
       ) : (
-        <Circle className="w-3.5 h-3.5 text-surface-300 flex-shrink-0" />
+        <Circle className="w-3.5 h-3.5 text-surface-300 flex-shrink-0 opacity-50" strokeDasharray="3 2" />
       )}
       <div className="flex-1 min-w-0">
         <div className="truncate font-medium text-surface-700">{section.title}</div>
@@ -99,10 +131,10 @@ function SectionRow({
           {hasContent ? (
             <span>
               {wordCount} words
-              {isAIDrafted && <span className="ml-1 text-accent-500">• AI</span>}
+              {isAIDrafted && <span className="ml-1 text-accent-500 font-medium">AI</span>}
             </span>
           ) : (
-            <span className="text-surface-300">empty</span>
+            <span className="text-surface-300 italic">empty — click to write</span>
           )}
         </div>
       </div>
@@ -127,30 +159,47 @@ function EmptyDeliverables({ workspaceId }: { workspaceId: string }) {
   const { createDeliverable } = useDeliverableStore();
   const [showMenu, setShowMenu] = useState(false);
 
-  const types: DeliverableType[] = ["deep_research", "proposal", "research_plan", "notes"];
+  const types: { type: DeliverableType; desc: string }[] = [
+    { type: "deep_research", desc: "Synthesized research brief" },
+    { type: "proposal", desc: "Grant or project proposal" },
+    { type: "research_plan", desc: "Structured research plan" },
+    { type: "notes", desc: "Freeform notes" },
+  ];
 
   return (
-    <div className="flex flex-col items-center justify-center h-full px-4 py-8 text-center">
-      <FileText className="w-8 h-8 text-surface-300 mb-2" />
-      <p className="text-xs text-surface-500 mb-3">No deliverables yet</p>
+    <div className="flex flex-col items-center justify-center h-full px-5 py-8 text-center">
+      <div className="w-10 h-10 rounded-full bg-surface-100 flex items-center justify-center mb-3">
+        <FileText className="w-5 h-5 text-surface-400" />
+      </div>
+      <p className="text-xs font-medium text-surface-600 mb-1">No deliverables yet</p>
+      <p className="text-[10px] text-surface-400 mb-4 leading-relaxed">
+        Create a deliverable to organize your writing, or run Deep Research / Proposal Plan to generate one automatically.
+      </p>
       <div className="relative">
         <button
           onClick={() => setShowMenu(!showMenu)}
-          className="inline-flex items-center gap-1 text-xs text-accent-600 hover:text-accent-700 font-medium"
+          className="inline-flex items-center gap-1.5 text-xs text-white bg-accent-600 hover:bg-accent-700 font-medium px-3 py-1.5 rounded-lg transition-colors"
         >
-          <Plus className="w-3 h-3" /> Create one
+          <Plus className="w-3 h-3" /> Create deliverable
         </button>
         {showMenu && (
-          <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 bg-white border border-surface-200 rounded-lg shadow-lg py-1 z-10 min-w-[140px]">
-            {types.map((type) => (
-              <button
-                key={type}
-                onClick={() => { createDeliverable(workspaceId, type); setShowMenu(false); }}
-                className="block w-full text-left px-3 py-1.5 text-xs text-surface-700 hover:bg-surface-50"
-              >
-                {TYPE_LABELS[type]}
-              </button>
-            ))}
+          <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 bg-white border border-surface-200 rounded-lg shadow-lg py-1 z-10 min-w-[180px]">
+            {types.map(({ type, desc }) => {
+              const Icon = TYPE_ICONS[type];
+              return (
+                <button
+                  key={type}
+                  onClick={() => { createDeliverable(workspaceId, type); setShowMenu(false); }}
+                  className="flex items-start gap-2 w-full text-left px-3 py-2 text-xs text-surface-700 hover:bg-surface-50"
+                >
+                  <Icon className="w-3.5 h-3.5 mt-0.5 text-surface-400 flex-shrink-0" />
+                  <div>
+                    <div className="font-medium">{TYPE_LABELS[type]}</div>
+                    <div className="text-[10px] text-surface-400">{desc}</div>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
