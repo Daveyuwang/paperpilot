@@ -39,22 +39,7 @@ async def fetch_external_background(concept: str) -> str:
 
     wiki_result: str | None = None
     try:
-        from app.circuit_breaker import wikipedia_breaker, PYBREAKER_AVAILABLE
-
-        if PYBREAKER_AVAILABLE:
-            import pybreaker
-
-            try:
-                wiki_result = await wikipedia_breaker.call_async(_wikipedia_fetch)
-            except pybreaker.CircuitBreakerError:
-                logger.warning("wikipedia_circuit_open", concept=concept)
-        else:
-            wiki_result = await _wikipedia_fetch()
-    except ImportError:
-        try:
-            wiki_result = await _wikipedia_fetch()
-        except Exception as exc:
-            logger.warning("wikipedia_fetch_failed", concept=concept, error=str(exc))
+        wiki_result = await _wikipedia_fetch()
     except Exception as exc:
         logger.warning("wikipedia_fetch_failed", concept=concept, error=str(exc))
 

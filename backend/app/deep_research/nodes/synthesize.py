@@ -14,8 +14,8 @@ from app.deep_research.state import DeepResearchState
 
 logger = structlog.get_logger()
 
-SECTION_TIMEOUT_S = 60
-OUTLINE_TIMEOUT_S = 45
+SECTION_TIMEOUT_S = 90
+OUTLINE_TIMEOUT_S = 90
 
 OUTLINE_SYSTEM = """\
 You are a research synthesis expert. Given sub-reports on a research topic, \
@@ -147,11 +147,12 @@ async def synthesize_node(state: DeepResearchState) -> dict:
             ],
         )
     except Exception as exc:
-        logger.error("synthesize_outline_failed", error=str(exc))
+        logger.error("synthesize_outline_failed", error=repr(exc))
+        err_desc = repr(exc) if not str(exc) else str(exc)[:200]
         return {
             "final_report": ResearchReport(
                 title="Partial Research Synthesis: Report Generation Incomplete",
-                executive_summary=f"Report outline generation failed: {str(exc)[:200]}",
+                executive_summary=f"Report outline generation failed: {err_desc}",
                 sections=[],
                 key_findings=[f.key_facts[0] if f.key_facts else f.question
                               for f in sub_reports[:5] if f.findings and f.confidence > 0],

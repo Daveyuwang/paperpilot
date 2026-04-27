@@ -471,7 +471,7 @@ export function ConceptMap({
       .then((data) => {
         setConceptMap(data);
         setSelectedNode(getPrimaryNode(data));
-        if (!data.generated) setAutoPolling(true);
+        // Concept map is generated on-demand; show Generate button instead of polling.
       })
       .catch((nextError) => setError(String(nextError)))
       .finally(() => setLoading(false));

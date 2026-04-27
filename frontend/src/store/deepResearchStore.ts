@@ -251,9 +251,23 @@ export const useDeepResearchStore = create<DeepResearchState>()(
         clarificationQuestions: questions,
       }),
 
-      setFailed: (message) => set({ status: "failed", errorMessage: message }),
+      setFailed: (message) => set((s) => ({
+        status: "failed",
+        errorMessage: message,
+        currentActivity: null,
+        macroStages: s.macroStages.map((stage) =>
+          stage.status === "in_progress" ? { ...stage, status: "pending" as const } : stage
+        ),
+      })),
 
-      setBlocked: (message) => set({ status: "blocked", errorMessage: message }),
+      setBlocked: (message) => set((s) => ({
+        status: "blocked",
+        errorMessage: message,
+        currentActivity: null,
+        macroStages: s.macroStages.map((stage) =>
+          stage.status === "in_progress" ? { ...stage, status: "pending" as const } : stage
+        ),
+      })),
 
       setCreatedDeliverableId: (id) => set({ createdDeliverableId: id }),
 

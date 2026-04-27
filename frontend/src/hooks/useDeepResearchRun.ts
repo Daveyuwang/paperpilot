@@ -15,7 +15,7 @@ export function useDeepResearchRun(workspaceId: string) {
   const { activePaper } = usePaperStore();
   const { getDeliverables, createDeliverable, applyAIContent, setActiveDeliverable, renameDeliverable, replaceSections, selectSection } = useDeliverableStore();
   const { addSystemFollowup } = useAgendaStore();
-  const { setSelectedNav, setActiveViewerTab } = useWorkspaceStore();
+  const { setSelectedNav, setActiveViewerTab, setConsolePanelTab } = useWorkspaceStore();
 
   const sources = getIncludedSources(workspaceId);
   const deliverables = getDeliverables(workspaceId);
@@ -293,7 +293,8 @@ export function useDeepResearchRun(workspaceId: string) {
             const firstSection = del?.sections.sort((a, b) => a.order - b.order)[0];
             if (firstSection) selectSection(finalDelId, firstSection.id);
             setActiveViewerTab("deliverable");
-            setSelectedNav("reader");
+            setSelectedNav("console");
+            setConsolePanelTab("deliverable");
           }
         }
       }, controller.signal);
@@ -306,7 +307,7 @@ export function useDeepResearchRun(workspaceId: string) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       setFailed(err instanceof Error ? err.message : "Request failed");
     }
-  }, [input, sources, workspaceId, activePaper, deliverables, startRun, setFailed, addFromDiscovery, setLabel, createDeliverable, applyAIContent, addSystemFollowup, setActiveDeliverable, renameDeliverable, replaceSections, selectSection, getDeliverables, setActiveViewerTab, setSelectedNav]);
+  }, [input, sources, workspaceId, activePaper, deliverables, startRun, setFailed, addFromDiscovery, setLabel, createDeliverable, applyAIContent, addSystemFollowup, setActiveDeliverable, renameDeliverable, replaceSections, selectSection, getDeliverables, setActiveViewerTab, setSelectedNav, setConsolePanelTab]);
 
   return runStream;
 }

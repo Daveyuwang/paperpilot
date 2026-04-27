@@ -62,24 +62,7 @@ async def search_academic_papers(query: str, max_results: int = 5) -> list[dict]
             ]
 
     try:
-        from app.circuit_breaker import semantic_scholar_breaker, PYBREAKER_AVAILABLE
-
-        if PYBREAKER_AVAILABLE:
-            import pybreaker
-
-            try:
-                return await semantic_scholar_breaker.call_async(_do_search)
-            except pybreaker.CircuitBreakerError:
-                logger.warning("semantic_scholar_circuit_open")
-                return []
-        else:
-            return await _do_search()
-    except ImportError:
-        try:
-            return await _do_search()
-        except Exception as exc:
-            logger.warning("semantic_scholar_search_error", error=str(exc))
-            return []
+        return await _do_search()
     except Exception as exc:
         logger.warning("semantic_scholar_search_error", error=str(exc))
         return []
