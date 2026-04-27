@@ -7,6 +7,7 @@ from app.agents.graph import run_agent_turn
 from app.agents.console import run_console_turn
 from app.db.postgres import AsyncSessionLocal
 from app.models.orm import Session
+from app.tracing import create_trace
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -47,6 +48,10 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
                 await websocket.send_json({"type": "error", "content": "Invalid JSON."})
                 continue
 
+            if data.get("type") == "ping":
+                await websocket.send_json({"type": "pong"})
+                continue
+
             question = data.get("question", "").strip()
             if not question:
                 await websocket.send_json({"type": "error", "content": "Empty question."})
@@ -57,6 +62,12 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
             context = data.get("context") or {}
 
             sent_done = False
+            trace = create_trace(
+                name="console" if is_console_session else "paper_qa",
+                session_id=session_id,
+                guest_id=guest_id,
+                workspace_id=workspace_id or "",
+            )
             try:
                 if is_console_session:
                     async for message in run_console_turn(

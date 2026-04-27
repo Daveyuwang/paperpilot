@@ -15,6 +15,37 @@ def new_uuid() -> str:
     return str(uuid.uuid4())
 
 
+# ── Workflow Run enums ────────────────────────────────────────────────────
+
+
+class WorkflowRunStatus(str, enum.Enum):
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    interrupted = "interrupted"
+
+
+class WorkflowRunType(str, enum.Enum):
+    deep_research = "deep_research"
+    proposal = "proposal"
+    plan = "plan"
+    deliverable_draft = "deliverable_draft"
+
+
+# ── Ingestion Stage enum ─────────────────────────────────────────────────
+
+
+class IngestionStage(str, enum.Enum):
+    uploaded = "uploaded"
+    text_extracted = "text_extracted"
+    chunked = "chunked"
+    embedded = "embedded"
+    concept_mapped = "concept_mapped"
+    scaffolded = "scaffolded"
+    ready = "ready"
+    failed = "failed"
+
+
 class Workspace(Base):
     __tablename__ = "workspaces"
 
@@ -54,6 +85,9 @@ class Paper(Base):
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     celery_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ingestion_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    ingestion_progress: Mapped[int] = mapped_column(Integer, default=0)
+    ingestion_error_detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -165,3 +199,38 @@ class PaperConceptMap(Base):
     # Full concept map: {nodes: [...], edges: [...]}
     data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     generated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class WorkflowRun(Base):
+    __tablename__ = "workflow_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    workspace_id: Mapped[str] = mapped_column(String(36), ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    guest_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    run_type: Mapped[WorkflowRunType] = mapped_column(SAEnum(WorkflowRunType))
+    status: Mapped[WorkflowRunStatus] = mapped_column(
+        SAEnum(WorkflowRunStatus), default=WorkflowRunStatus.running
+    )
+    input_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    current_stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    stages_completed: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
+    artifacts: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    token_usage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class UserPreferences(Base):
+    """Cross-workspace user preferences / memory."""
+    __tablename__ = "user_preferences"
+
+    guest_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    terminology: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    citation_style: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    research_domains: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    writing_style: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    custom_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

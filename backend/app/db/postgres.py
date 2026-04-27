@@ -29,7 +29,12 @@ async def get_db() -> AsyncSession:
 
 
 async def init_db() -> None:
-    """Create all tables on startup (dev mode); production uses Alembic."""
+    """Create all tables on startup (dev mode); production uses Alembic.
+
+    Note: Base.metadata.create_all handles new tables (e.g. workflow_runs)
+    automatically.  ALTER TABLE statements below are for adding columns to
+    existing tables that may already exist in production.
+    """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.execute(text("ALTER TABLE papers ADD COLUMN IF NOT EXISTS guest_id VARCHAR(64)"))
@@ -55,3 +60,7 @@ async def init_db() -> None:
                 "ON sessions (guest_id, paper_id, last_active DESC)"
             )
         )
+        # Phase 4 – ingestion progress columns on papers
+        await conn.execute(text("ALTER TABLE papers ADD COLUMN IF NOT EXISTS ingestion_stage VARCHAR(32)"))
+        await conn.execute(text("ALTER TABLE papers ADD COLUMN IF NOT EXISTS ingestion_progress INTEGER DEFAULT 0"))
+        await conn.execute(text("ALTER TABLE papers ADD COLUMN IF NOT EXISTS ingestion_error_detail JSON"))

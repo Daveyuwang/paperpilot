@@ -47,6 +47,7 @@ class DraftRequest(BaseModel):
     selected_section_id: str | None = None
     revision_instruction: str | None = None
     active_paper_id: str | None = None
+    target_section_id: str | None = None  # For inline editing: only regenerate this section
 
 
 class SectionUpdate(BaseModel):

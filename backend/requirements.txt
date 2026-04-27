@@ -2,57 +2,56 @@
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
-websockets>=12.0
+websockets==14.2
 
 # ── Database ───────────────────────────────────────────────────────────────
-sqlalchemy[asyncio]>=2.0.29
+sqlalchemy[asyncio]==2.0.49
 asyncpg>=0.29.0
 psycopg2-binary>=2.9.9
 alembic>=1.13.1
 
 # ── Cache / Queue ──────────────────────────────────────────────────────────
-redis[hiredis]>=5.0.3
-celery[redis]>=5.3.6
+redis[hiredis]>=5.0,<6.5
+celery[redis]>=5.6.0
 
 # ── LLM & Agents ───────────────────────────────────────────────────────────
-anthropic>=0.25.0
-langgraph>=0.1.1
-langchain-core>=0.2.0
-langchain-anthropic>=0.1.15
+anthropic==0.96.0
+langgraph==1.1.8
+langchain-core==1.3.0
+langchain-anthropic==1.4.1
 langchain-openai>=0.1.0
+langchain-community==0.4.1
 
 # ── PDF Parsing ────────────────────────────────────────────────────────────
 pymupdf>=1.24.0
-Pillow>=10.3.0
+Pillow==12.1.1
 
 # ── Embeddings & Retrieval ─────────────────────────────────────────────────
-sentence-transformers>=2.7.0
-qdrant-client>=1.9.0
-rank-bm25>=0.2.2
+sentence-transformers==5.4.1
+qdrant-client==1.17.1
+rank-bm25==0.2.2
 
 # ── NLP / NER ──────────────────────────────────────────────────────────────
 spacy>=3.7.4
-networkx>=3.3
+networkx==3.6.1
 
 # ── External APIs ──────────────────────────────────────────────────────────
-httpx>=0.27.0
+httpx==0.28.1
 wikipedia-api>=0.6.0
 tavily-python>=0.3.0
 trafilatura>=1.6.0
 
-# ── LangChain Community ───────────────────────────────────────────────────
-langchain-community>=0.2.0
+# ── Rate limiting ──────────────────────────────────────────────────────────
+slowapi>=0.1.9
+
+# ── Observability ──────────────────────────────────────────────────────────
+langfuse>=2.0.0
 
 # ── Utilities ──────────────────────────────────────────────────────────────
-pydantic>=2.7.0
-pydantic-settings>=2.2.1
+pybreaker>=1.0.0
+pydantic==2.12.4
+pydantic-settings==2.12.0
 python-dotenv>=1.0.1
-tenacity>=8.3.0
-structlog>=24.1.0
-numpy>=1.26.4
-
-# ── Dev / Testing ──────────────────────────────────────────────────────────
-pytest>=8.1.0
-pytest-asyncio>=0.23.6
-httpx>=0.27.0
-ruff>=0.4.0
+tenacity==9.1.4
+structlog==25.5.0
+numpy==2.4.4

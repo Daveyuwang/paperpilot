@@ -4,6 +4,7 @@ Confidence is scored by checking text coverage and structure quality.
 """
 from __future__ import annotations
 import re
+from statistics import median as _median
 import structlog
 import fitz  # PyMuPDF
 
@@ -39,11 +40,12 @@ def parse_pdf(pdf_path: str) -> dict:
     page_count = len(doc)
 
     blocks_by_page: list[list[dict]] = []
-    total_text_len = 0
+    page_char_counts: list[int] = []
 
     for page_num, page in enumerate(doc):
         blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)["blocks"]
         page_blocks = []
+        page_text_len = 0
         for block in blocks:
             if block["type"] == 0:  # text block
                 text = " ".join(
@@ -60,7 +62,7 @@ def parse_pdf(pdf_path: str) -> dict:
                     "bbox": {"page": page_num + 1, "x0": bbox[0], "y0": bbox[1], "x1": bbox[2], "y1": bbox[3]},
                     "font_size": _dominant_font_size(block),
                 })
-                total_text_len += len(text)
+                page_text_len += len(text)
             elif block["type"] == 1:  # image block
                 bbox = block["bbox"]
                 page_blocks.append({
@@ -71,11 +73,16 @@ def parse_pdf(pdf_path: str) -> dict:
                     "font_size": 0,
                 })
         blocks_by_page.append(page_blocks)
+        page_char_counts.append(page_text_len)
 
-    # Confidence: based on character density and presence of section headers
-    avg_chars_per_page = total_text_len / max(page_count, 1)
+    # Log pages with very little text (likely figure/table-only pages)
+    low_text_pages = [i + 1 for i, c in enumerate(page_char_counts) if c < 50]
+    if low_text_pages:
+        logger.info("low_text_pages", count=len(low_text_pages), pages=low_text_pages[:10])
+
+    # Confidence: based on median char density, section headers, and text-rich ratio
     sections_found = _detect_sections(blocks_by_page)
-    confidence = _compute_confidence(avg_chars_per_page, sections_found)
+    confidence = _compute_confidence(page_char_counts, sections_found)
 
     # Extract structured content
     title = _extract_title(blocks_by_page)
@@ -88,6 +95,7 @@ def parse_pdf(pdf_path: str) -> dict:
         "abstract": abstract,
         "section_headers": [s["title"] for s in sections_found],
         "page_count": page_count,
+        "page_char_counts": page_char_counts,
         "confidence": confidence,
         "raw_chunks": raw_chunks,
     }
@@ -116,20 +124,32 @@ def _detect_sections(blocks_by_page: list[list[dict]]) -> list[dict]:
     return sections
 
 
-def _compute_confidence(avg_chars: float, sections: list[dict]) -> float:
+def _compute_confidence(page_char_counts: list[int], sections: list[dict]) -> float:
     score = 0.0
-    # Dense text is a good sign
-    if avg_chars > 500:
+
+    if not page_char_counts:
+        return score
+
+    # Median chars per page — resistant to outlier figure-only pages
+    median_chars = _median(page_char_counts)
+    if median_chars > 500:
         score += 0.4
-    elif avg_chars > 200:
+    elif median_chars > 200:
         score += 0.2
+
     # Having recognizable section headers is a good sign
     if len(sections) >= 3:
-        score += 0.4
+        score += 0.3
     elif len(sections) >= 1:
-        score += 0.2
-    # Base quality
-    score += 0.2
+        score += 0.15
+
+    # Ratio of pages that are text-rich (chars > 200)
+    text_rich_ratio = sum(1 for c in page_char_counts if c > 200) / max(len(page_char_counts), 1)
+    if text_rich_ratio > 0.8:
+        score += 0.3
+    elif text_rich_ratio > 0.5:
+        score += 0.15
+
     return round(min(score, 1.0), 2)
 
 

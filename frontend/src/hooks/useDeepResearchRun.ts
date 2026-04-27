@@ -1,5 +1,5 @@
-import { useCallback } from "react";
-import { useDeepResearchStore, type DeepResearchStatus } from "@/store/deepResearchStore";
+import { useCallback, useRef } from "react";
+import { useDeepResearchStore, type DeepResearchStatus, type ActivityEvent } from "@/store/deepResearchStore";
 import { useDeliverableStore } from "@/store/deliverableStore";
 import { useSourceStore } from "@/store/sourceStore";
 import { useAgendaStore } from "@/store/agendaStore";
@@ -13,15 +13,19 @@ export function useDeepResearchRun(workspaceId: string) {
   const { input, startRun, setFailed } = store;
   const { getIncludedSources, addFromDiscovery, setLabel } = useSourceStore();
   const { activePaper } = usePaperStore();
-  const { getDeliverables, createDeliverable, applyAIContent, setActiveDeliverable, renameDeliverable, selectSection } = useDeliverableStore();
+  const { getDeliverables, createDeliverable, applyAIContent, setActiveDeliverable, renameDeliverable, replaceSections, selectSection } = useDeliverableStore();
   const { addSystemFollowup } = useAgendaStore();
   const { setSelectedNav, setActiveViewerTab } = useWorkspaceStore();
 
   const sources = getIncludedSources(workspaceId);
   const deliverables = getDeliverables(workspaceId);
+  const abortRef = useRef<AbortController | null>(null);
 
   const runStream = useCallback(async () => {
     const { generatedPlan } = useDeepResearchStore.getState();
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     startRun();
 
     const wsPayload = sources.map((s) => ({
@@ -76,6 +80,7 @@ export function useDeepResearchRun(workspaceId: string) {
 
     try {
       await api.runDeepResearchStream(payload, (event) => {
+        if (controller.signal.aborted) return;
         const s = useDeepResearchStore.getState();
         const type = event.type as string;
 
@@ -86,7 +91,7 @@ export function useDeepResearchRun(workspaceId: string) {
           if (msg) s.setStageMessage(msg);
           s.pushStage(stage, msg || stage);
           if (stage === "planning") {
-            const planStage = s.macroStages?.find((st: any) => st.key === "plan");
+            const planStage = s.macroStages?.find((st) => st.key === "plan");
             if (!planStage || planStage.status !== "completed") {
               s.setMacroStageStatus("plan", "in_progress");
             }
@@ -109,7 +114,7 @@ export function useDeepResearchRun(workspaceId: string) {
         } else if (type === "activity") {
           const actType = (event.activity_type as string) || "thinking";
           const label = (event.label as string) || "Working...";
-          s.pushActivity({ type: actType as any, label, status: "active" });
+          s.pushActivity({ type: actType as ActivityEvent["type"], label, status: "active" });
           if (actType !== "done") {
             s.setCurrentActivity(label);
           }
@@ -249,6 +254,10 @@ export function useDeepResearchRun(workspaceId: string) {
             renameDeliverable(workspaceId, delId, res.generated_title);
           }
 
+          if (res.generated_outline && res.generated_outline.length > 0) {
+            replaceSections(workspaceId, delId, res.generated_outline);
+          }
+
           const currentDel = useDeliverableStore.getState().getDeliverables(workspaceId).find((d) => d.id === delId);
           if (currentDel && res.section_updates) {
             const sortedSections = [...currentDel.sections].sort((a, b) => a.order - b.order);
@@ -287,16 +296,17 @@ export function useDeepResearchRun(workspaceId: string) {
             setSelectedNav("reader");
           }
         }
-      });
+      }, controller.signal);
 
       const finalStatus = useDeepResearchStore.getState().status;
       if (!["completed", "failed", "blocked", "needs_clarification"].includes(finalStatus)) {
         setFailed("Stream ended unexpectedly. Please try again.");
       }
     } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setFailed(err instanceof Error ? err.message : "Request failed");
     }
-  }, [input, sources, workspaceId, activePaper, deliverables, startRun, setFailed, addFromDiscovery, setLabel, createDeliverable, applyAIContent, addSystemFollowup, setActiveDeliverable, renameDeliverable, selectSection, getDeliverables, setActiveViewerTab, setSelectedNav]);
+  }, [input, sources, workspaceId, activePaper, deliverables, startRun, setFailed, addFromDiscovery, setLabel, createDeliverable, applyAIContent, addSystemFollowup, setActiveDeliverable, renameDeliverable, replaceSections, selectSection, getDeliverables, setActiveViewerTab, setSelectedNav]);
 
   return runStream;
 }

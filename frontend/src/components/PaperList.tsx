@@ -1,14 +1,40 @@
 import React, { useEffect, useState } from "react";
-import { FileText, Loader2, CheckCircle, AlertCircle, Clock, Trash2, MessageSquare } from "lucide-react";
+import { FileText, Loader2, CheckCircle, AlertCircle, Clock, Trash2 } from "lucide-react";
 import clsx from "clsx";
 import { usePaperStore } from "@/store/paperStore";
 import { useWorkspaceStore } from "@/store/workspaceStore";
+import { useIngestionProgress, stageLabel } from "@/hooks/useIngestionProgress";
 import type { PaperStatus } from "@/types";
 
-function StatusBadge({ status }: { status: PaperStatus }) {
-  const cfg: Record<PaperStatus, { label: string; icon: React.ReactNode; color: string }> = {
+function ProgressBadge({ paperId }: { paperId: string }) {
+  const { stage, progress } = useIngestionProgress(paperId, true);
+  const label = stageLabel(stage);
+  const pct = progress ?? 0;
+
+  return (
+    <div className="flex flex-col gap-0.5 mt-0.5">
+      <span className="flex items-center gap-1 text-[10px] text-accent-500">
+        <Loader2 className="w-2.5 h-2.5 animate-spin" />
+        {label}{progress != null ? ` ${pct}%` : ""}
+      </span>
+      {progress != null && (
+        <div className="w-full h-1 bg-surface-200 rounded-full overflow-hidden">
+          <div
+            className="h-full bg-accent-400 rounded-full transition-all duration-500"
+            style={{ width: `${Math.min(pct, 100)}%` }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatusBadge({ status, paperId }: { status: PaperStatus; paperId: string }) {
+  if (status === "processing") {
+    return <ProgressBadge paperId={paperId} />;
+  }
+  const cfg: Record<Exclude<PaperStatus, "processing">, { label: string; icon: React.ReactNode; color: string }> = {
     pending:    { label: "Pending",    icon: <Clock className="w-2.5 h-2.5" />,       color: "text-surface-400" },
-    processing: { label: "Processing", icon: <Loader2 className="w-2.5 h-2.5 animate-spin" />, color: "text-accent-500" },
     ready:      { label: "Ready",      icon: <CheckCircle className="w-2.5 h-2.5" />, color: "text-emerald-600" },
     error:      { label: "Error",      icon: <AlertCircle className="w-2.5 h-2.5" />, color: "text-red-500" },
   };
@@ -81,7 +107,7 @@ export function PaperList({ onSelect }: Props) {
                 <p className="text-xs font-medium text-surface-700 truncate leading-snug">
                   {paper.title ?? paper.filename}
                 </p>
-                <StatusBadge status={paper.status} />
+                <StatusBadge status={paper.status} paperId={paper.id} />
               </div>
             </button>
             {confirmingDelete === paper.id ? (

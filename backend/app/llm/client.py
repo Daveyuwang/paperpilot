@@ -7,11 +7,50 @@ from typing import Any, AsyncIterator
 import httpx
 import structlog
 from anthropic import AsyncAnthropic
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception,
+    before_sleep_log,
+)
 
 from app.llm.types import ChatMessage, ResolvedLLMSettings, ProtocolType
 
 logger = structlog.get_logger()
 
+
+# ---------------------------------------------------------------------------
+# Retry helpers
+# ---------------------------------------------------------------------------
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Return True for transient / rate-limit errors that are safe to retry."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in (429, 500, 502, 503, 529)
+    if isinstance(exc, asyncio.TimeoutError):
+        return True
+    try:
+        from anthropic import RateLimitError, InternalServerError, APIConnectionError
+        if isinstance(exc, (RateLimitError, InternalServerError, APIConnectionError)):
+            return True
+    except ImportError:
+        pass
+    return False
+
+
+_llm_retry = retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=30),
+    retry=retry_if_exception(_is_retryable),
+    reraise=True,
+    before_sleep=before_sleep_log(logger, "warning"),
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _default_model_for_protocol(protocol: ProtocolType) -> str:
     if protocol == "openai":
@@ -40,9 +79,14 @@ def _strip_code_fences(text: str) -> str:
     return raw.strip()
 
 
+# ---------------------------------------------------------------------------
+# LLMClient
+# ---------------------------------------------------------------------------
+
 class LLMClient:
     def __init__(self, resolved: ResolvedLLMSettings):
         self.resolved = resolved
+        self.trace = None  # Set externally to attach tracing
 
     @property
     def protocol(self) -> ProtocolType:
@@ -59,9 +103,42 @@ class LLMClient:
         messages: list[ChatMessage],
         max_tokens: int = 1024,
         temperature: float = 0.2,
+        trace=None,
+    ) -> str:
+        parent = trace or self.trace
+        if parent:
+            from app.tracing import trace_llm_call
+            with trace_llm_call(
+                parent,
+                name="create_text",
+                model=self.model,
+                input_data={"system": system, "messages": messages},
+            ) as gen:
+                result = await self._create_text_impl(
+                    system=system, messages=messages,
+                    max_tokens=max_tokens, temperature=temperature,
+                )
+                gen.update(output=result)
+                return result
+        return await self._create_text_impl(
+            system=system, messages=messages,
+            max_tokens=max_tokens, temperature=temperature,
+        )
+
+    @_llm_retry
+    async def _create_text_impl(
+        self,
+        *,
+        system: str | None = None,
+        messages: list[ChatMessage],
+        max_tokens: int = 1024,
+        temperature: float = 0.2,
     ) -> str:
         if self.protocol == "anthropic":
-            client = AsyncAnthropic(api_key=self.resolved.api_key)
+            client = AsyncAnthropic(
+                api_key=self.resolved.api_key,
+                timeout=60.0,
+            )
             resp = await client.messages.create(
                 model=self.model,
                 max_tokens=max_tokens,
@@ -98,15 +175,43 @@ class LLMClient:
         messages: list[ChatMessage],
         max_tokens: int = 1024,
         temperature: float = 0.2,
+        max_retries: int = 2,
+        trace=None,
     ) -> Any:
-        text = await self.create_text(
-            system=system,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
+        """Call the LLM and parse the response as JSON.
+
+        If the response is not valid JSON the LLM is prompted to fix its
+        output up to *max_retries* additional times before raising.
+        """
+        last_error: str | None = None
+        for attempt in range(1 + max_retries):
+            retry_messages = list(messages)
+            if last_error and attempt > 0:
+                retry_messages.append({
+                    "role": "user",
+                    "content": (
+                        f"Your previous response was not valid JSON. Error: {last_error}\n"
+                        "Please respond with valid JSON only."
+                    ),
+                })
+            text = await self.create_text(
+                system=system,
+                messages=retry_messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                trace=trace,
+            )
+            cleaned = _strip_code_fences(text)
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError as e:
+                last_error = str(e)
+                logger.warning(
+                    "json_parse_retry", attempt=attempt, error=last_error
+                )
+        raise ValueError(
+            f"Failed to parse JSON after {max_retries + 1} attempts: {last_error}"
         )
-        cleaned = _strip_code_fences(text)
-        return json.loads(cleaned)
 
     async def stream_text(
         self,
@@ -115,9 +220,60 @@ class LLMClient:
         messages: list[ChatMessage],
         max_tokens: int = 1024,
         temperature: float = 0.2,
+        trace=None,
+    ) -> AsyncIterator[str]:
+        parent = trace or self.trace
+        gen_span = None
+        if parent:
+            from app.tracing import NoopSpan, NoopTrace
+            if not isinstance(parent, (NoopSpan, NoopTrace)):
+                try:
+                    gen_span = parent.generation(
+                        name="stream_text",
+                        model=self.model,
+                        input={"system": system, "messages": messages},
+                        metadata={},
+                    )
+                except Exception:
+                    gen_span = None
+
+        collected: list[str] = []
+        try:
+            async for tok in self._stream_text_impl(
+                system=system, messages=messages,
+                max_tokens=max_tokens, temperature=temperature,
+            ):
+                collected.append(tok)
+                yield tok
+        except Exception as e:
+            if gen_span:
+                try:
+                    gen_span.update(status_message=str(e), level="ERROR")
+                    gen_span.end()
+                except Exception:
+                    pass
+            raise
+        else:
+            if gen_span:
+                try:
+                    gen_span.update(output="".join(collected))
+                    gen_span.end()
+                except Exception:
+                    pass
+
+    async def _stream_text_impl(
+        self,
+        *,
+        system: str | None = None,
+        messages: list[ChatMessage],
+        max_tokens: int = 1024,
+        temperature: float = 0.2,
     ) -> AsyncIterator[str]:
         if self.protocol == "anthropic":
-            client = AsyncAnthropic(api_key=self.resolved.api_key)
+            client = AsyncAnthropic(
+                api_key=self.resolved.api_key,
+                timeout=60.0,
+            )
             async with client.messages.stream(
                 model=self.model,
                 max_tokens=max_tokens,
@@ -314,4 +470,3 @@ async def _gemini_stream_text(
                 if tok:
                     yield tok
                 await asyncio.sleep(0)
-

@@ -189,11 +189,13 @@ export const api = {
       active_paper_id?: string | null;
     },
     onEvent: (event: Record<string, unknown>) => void,
+    signal?: AbortSignal,
   ): Promise<void> {
     const response = await fetch(`${API_BASE}/api/drafts/run/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Guest-Id": getGuestId() },
       body: JSON.stringify(payload),
+      signal,
     });
     if (!response.ok) {
       const text = await response.text().catch(() => "");
@@ -299,11 +301,13 @@ export const api = {
       } | null;
     },
     onEvent: (event: Record<string, unknown>) => void,
+    signal?: AbortSignal,
   ): Promise<void> {
     const response = await fetch(`${API_BASE}/api/deep-research/run/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Guest-Id": getGuestId() },
       body: JSON.stringify(payload),
+      signal,
     });
     if (!response.ok) {
       const text = await response.text().catch(() => "");
@@ -374,11 +378,13 @@ export const api = {
       } | null;
     },
     onEvent: (event: Record<string, unknown>) => void,
+    signal?: AbortSignal,
   ): Promise<void> {
     const response = await fetch(`${API_BASE}/api/proposal-plan/run/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Guest-Id": getGuestId() },
       body: JSON.stringify(payload),
+      signal,
     });
     if (!response.ok) {
       const text = await response.text().catch(() => "");

@@ -1,18 +1,22 @@
 import os
+import json
 import uuid
+import asyncio
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, UploadFile, File, Form, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import Optional
 
 from app.api.guest import require_guest_id, require_guest_id_for_download, get_owned_paper_or_404
-from app.db.postgres import get_db
+from app.db.postgres import get_db, AsyncSessionLocal
 from app.db.redis_client import delete_bm25_index
 from app.ingestion.celery_app import celery_app
 from app.models.orm import Paper, PaperStatus
 from app.models.schemas import PaperOut, PaperListItem, GuideQuestionOut, ChunkOut
 from app.config import get_settings
+from app.rate_limit import limiter
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -20,7 +24,9 @@ router = APIRouter()
 
 
 @router.post("/upload", response_model=PaperOut)
+@limiter.limit("5/hour")
 async def upload_paper(
+    request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     workspace_id: Optional[str] = Form(default=None),
@@ -180,3 +186,20 @@ async def get_pdf(
     if not os.path.exists(pdf_path):
         raise HTTPException(status_code=404, detail="PDF file not found.")
     return FileResponse(pdf_path, media_type="application/pdf")
+
+
+@router.get("/{paper_id}/ingestion-progress")
+async def ingestion_progress(paper_id: str, guest_id: str = Depends(require_guest_id)):
+    """SSE endpoint that streams ingestion stage and progress until the paper is ready or errored."""
+    async def event_stream():
+        while True:
+            async with AsyncSessionLocal() as db:
+                paper = await db.get(Paper, paper_id)
+                if not paper or paper.guest_id != guest_id:
+                    yield f"data: {json.dumps({'error': 'not_found'})}\n\n"
+                    return
+                yield f"data: {json.dumps({'stage': paper.ingestion_stage, 'progress': paper.ingestion_progress, 'status': paper.status.value})}\n\n"
+                if paper.status in (PaperStatus.ready, PaperStatus.error):
+                    return
+            await asyncio.sleep(2)
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

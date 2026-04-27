@@ -1,5 +1,5 @@
-import React, { useRef, useEffect, useState, useCallback } from "react";
-import { Send, Loader2, ArrowRight, Square, RotateCcw, MessageSquare, Search, GitCompare, PenTool, Sparkles, Pencil, X } from "lucide-react";
+import React, { useRef, useEffect, useState, useCallback, useMemo } from "react";
+import { Send, Loader2, Square, RotateCcw, Pencil, BookOpen } from "lucide-react";
 import clsx from "clsx";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useChatStore } from "@/store/chatStore";
@@ -21,6 +21,9 @@ import { WelcomePanel } from "./WelcomePanel";
 import { DoneMarker } from "./StatusSteps";
 import { MarkdownRenderer } from "./shared/MarkdownRenderer";
 import { AgentActivity } from "./shared/AgentActivity";
+import { EditableUserMessage } from "./QAPanel/EditableUserMessage";
+import { SuggestionsBlock } from "./QAPanel/SuggestionsBlock";
+import { ConsoleEmptyState } from "./QAPanel/ConsoleEmptyState";
 
 interface Props {
   onHighlight: (citations: Citation[]) => void;
@@ -137,6 +140,15 @@ export function QAPanel({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const slowHintTimerRef = useRef<number | null>(null);
   const stuckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const latestCitations = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant" && messages[i].citations.length > 0) {
+        return messages[i].citations;
+      }
+    }
+    return [] as Citation[];
+  }, [messages]);
 
   useEffect(() => {
     if (fillInputRef) {
@@ -281,12 +293,14 @@ export function QAPanel({
 
   const { sendMessage, disconnect, reconnect } = useWebSocket(effectiveSessionId, handleWSMessage);
 
-  const submit = useCallback((question: string, questionId?: string) => {
+  const submit = useCallback((question: string, questionId?: string, opts?: { skipAddMessage?: boolean }) => {
     if (!question.trim() || isGenerating) return;
     console.debug("[PaperPilot] question_submit", { question: question.slice(0, 80), questionId });
     setShowSuggestions(false);
     setActiveQuestionId(questionId ?? null);
-    addUserMessage(question);
+    if (!opts?.skipAddMessage) {
+      addUserMessage(question);
+    }
     const assistantId = startAssistantMessage();
     pendingAssistantId.current = assistantId;
     pendingCitationsRef.current = [];
@@ -353,10 +367,11 @@ export function QAPanel({
   }, [isGenerating, startSilentAssistantMessage, sendMessage]);
 
   useEffect(() => {
-    (window as any).__askGuideQuestion = (q: { id?: string; question: string }) => {
+    const win = window as Window & { __askGuideQuestion?: (q: { id?: string; question: string }) => void };
+    win.__askGuideQuestion = (q: { id?: string; question: string }) => {
       submit(q.question, q.id);
     };
-    return () => { delete (window as any).__askGuideQuestion; };
+    return () => { delete win.__askGuideQuestion; };
   });
 
   useEffect(() => {
@@ -488,7 +503,7 @@ export function QAPanel({
                     content={msg.content}
                     onResubmit={(newContent) => {
                       resubmitFrom(msg.id, newContent);
-                      submit(newContent);
+                      submit(newContent, undefined, { skipAddMessage: true });
                     }}
                     onCancel={() => setEditingMessageId(null)}
                   />
@@ -649,6 +664,34 @@ export function QAPanel({
         </div>
       </div>
 
+      {/* ── Citation Bar ─────────────────────────────────────────────────── */}
+      {latestCitations.length > 0 && !isGenerating && (
+        <div className="flex-shrink-0 px-4 py-2 bg-accent-50/80 border-t border-accent-200/60">
+          <div className={clsx(colClass)}>
+            <div className="flex items-center gap-2">
+              <BookOpen className="w-3.5 h-3.5 text-accent-600 flex-shrink-0" />
+              <span className="text-[11px] font-semibold text-accent-700 flex-shrink-0">Sources</span>
+              <div className="flex gap-1.5 overflow-x-auto scrollbar-hide">
+                {latestCitations.map((c, i) => {
+                  const sec = cleanCitationSection(c.section_title);
+                  return (
+                    <button
+                      key={i}
+                      className="flex-shrink-0 text-[11px] font-medium text-accent-700 bg-white border border-accent-300 px-2 py-0.5 rounded-md hover:bg-accent-100 hover:border-accent-400 transition-colors shadow-sm"
+                      onClick={() => onHighlight([c])}
+                      title="Jump to in PDF"
+                    >
+                      {sec ? `${sec}` : `Ref ${i + 1}`}
+                      {c.page_number != null && ` · p.${c.page_number}`}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Composer ─────────────────────────────────────────────────────── */}
       <div className="flex-shrink-0 px-4 py-3 bg-white border-t border-surface-100">
         <div className={clsx(colClass)}>
@@ -733,30 +776,7 @@ export function QAPanel({
 }
 
 
-// ── Activity strip (Phase A: before first token) ──────────────────────────
-
-function getActivityLabel(statusText: string): string {
-  const s = (statusText ?? "").toLowerCase();
-  if (s.includes("classifying") || s.includes("intent")) return "Thinking…";
-  if (s.includes("searching the web"))                    return "Searching the web…";
-  if (s.includes("searching academic") || s.includes("academic literature")) return "Searching academic papers…";
-  if (s.includes("citation context"))                     return "Checking citations…";
-  if (s.includes("analyzing source"))                     return "Analyzing sources…";
-  if (s.includes("fetching paper full") || s.includes("reading paper")) return "Reading paper…";
-  if (s.includes("coherence"))                            return "Reviewing document…";
-  if (s.includes("transition"))                           return "Improving flow…";
-  if (s.includes("synthesizing"))                         return "Synthesizing results…";
-  if (s.includes("retrieving") || s.includes("passage"))  return "Reading the paper…";
-  if (s.includes("searching across") || s.includes("workspace paper")) return "Searching workspace…";
-  if (s.includes("background") || s.includes("external")) return "Fetching background…";
-  if (s.includes("concept map"))                          return "Loading concepts…";
-  if (s.includes("metadata"))                             return "Loading paper info…";
-  if (s.includes("writing") || s.includes("generating"))  return "Writing response…";
-  if (s.includes("understanding") || s.includes("enriching")) return "Understanding question…";
-  if (s.includes("discover") || s.includes("finding"))    return "Discovering sources…";
-  if (s.includes("draft"))                                return "Drafting content…";
-  return "Thinking…";
-}
+// ── Utilities ──────────────────────────────────────────────────────────────
 
 function shouldShowSlowHint(statusText: string): boolean {
   const s = (statusText ?? "").toLowerCase();
@@ -765,67 +785,6 @@ function shouldShowSlowHint(statusText: string): boolean {
     return false;
   }
   return true;
-}
-
-
-// ── Editable user message (after stop/discard) ─────────────────────────────
-
-function EditableUserMessage({
-  content,
-  onResubmit,
-  onCancel,
-}: {
-  content: string;
-  onResubmit: (newContent: string) => void;
-  onCancel: () => void;
-}) {
-  const [text, setText] = React.useState(content);
-  const taRef = React.useRef<HTMLTextAreaElement>(null);
-
-  React.useEffect(() => {
-    if (taRef.current) {
-      taRef.current.focus();
-      taRef.current.style.height = "auto";
-      taRef.current.style.height = Math.min(taRef.current.scrollHeight, 120) + "px";
-    }
-  }, []);
-
-  return (
-    <div className="max-w-[90%] space-y-2">
-      <textarea
-        ref={taRef}
-        value={text}
-        onChange={(e) => {
-          setText(e.target.value);
-          e.target.style.height = "auto";
-          e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            if (text.trim()) onResubmit(text.trim());
-          }
-          if (e.key === "Escape") onCancel();
-        }}
-        className="w-full bg-accent-50 border border-accent-300 rounded-xl px-4 py-3 text-sm text-accent-700 resize-none focus:outline-none focus:ring-1 focus:ring-accent-400"
-        style={{ minHeight: "40px", maxHeight: "120px" }}
-      />
-      <div className="flex items-center gap-2 justify-end">
-        <button
-          onClick={onCancel}
-          className="text-xs text-surface-400 hover:text-surface-600 transition-colors px-2 py-1"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={() => text.trim() && onResubmit(text.trim())}
-          className="text-xs text-white bg-accent-600 hover:bg-accent-700 transition-colors px-3 py-1 rounded-md"
-        >
-          Resubmit
-        </button>
-      </div>
-    </div>
-  );
 }
 
 // ── Fade-up wrapper (Phase B: bubble entrance) ────────────────────────────
@@ -867,112 +826,6 @@ function FadeInSlide({ children }: { children: React.ReactNode }) {
       }}
     >
       {children}
-    </div>
-  );
-}
-
-// ── Suggestions block ──────────────────────────────────────────────────────
-
-const STAGE_DOT: Record<string, string> = {
-  motivation:  "bg-rose-400",
-  approach:    "bg-amber-400",
-  experiments: "bg-emerald-400",
-  takeaways:   "bg-accent-400",
-};
-
-const STAGE_LABEL: Record<string, string> = {
-  motivation: "Motivation",
-  approach: "Approach",
-  experiments: "Experiments",
-  takeaways: "Takeaways",
-};
-
-function SuggestionsBlock({
-  suggestions,
-  onAsk,
-}: {
-  suggestions: SuggestedQuestion[];
-  onAsk: (q: string, id: string) => void;
-}) {
-  const primary = suggestions.find((s) => s.is_primary);
-  const secondary = suggestions.filter((s) => !s.is_primary);
-
-  return (
-    <div className="pl-11 space-y-2">
-      {primary && (
-        <button
-          className="w-full text-left px-4 py-3 rounded-xl border border-accent-200 bg-accent-50 hover:bg-accent-100 flex items-start gap-3 group transition-colors"
-          onClick={() => onAsk(primary.question, primary.id)}
-        >
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5 mb-1">
-              <span className={clsx("w-1.5 h-1.5 rounded-full flex-shrink-0", STAGE_DOT[primary.stage] ?? "bg-surface-400")} />
-              <span className="text-[10px] font-semibold text-surface-500 uppercase tracking-wider">
-                Up next · {STAGE_LABEL[primary.stage] ?? primary.stage}
-              </span>
-            </div>
-            <p className="text-sm text-surface-700 leading-snug">{primary.question}</p>
-          </div>
-          <ArrowRight className="w-4 h-4 flex-shrink-0 mt-0.5 text-accent-400 group-hover:text-accent-600 transition-colors" />
-        </button>
-      )}
-
-      {secondary.length > 0 && (
-        <div className="space-y-1.5">
-          {secondary.map((q) => (
-            <button
-              key={q.id}
-              className="w-full text-left px-3 py-2.5 rounded-lg border border-surface-200 bg-surface-50 hover:bg-surface-100 transition-colors"
-              onClick={() => onAsk(q.question, q.id)}
-            >
-              <div className="flex items-center gap-1.5 mb-1">
-                <span className={clsx("w-1 h-1 rounded-full flex-shrink-0", STAGE_DOT[q.stage] ?? "bg-surface-400")} />
-                <span className="text-[10px] text-surface-500 uppercase tracking-wide">
-                  {STAGE_LABEL[q.stage] ?? q.stage}
-                </span>
-              </div>
-              <p className="text-xs text-surface-600 leading-snug line-clamp-2">{q.question}</p>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Console empty state ───────────────────────────────────────────────────
-
-const CONSOLE_ACTIONS = [
-  { label: "Find recent related work", icon: Search },
-  { label: "Compare included sources", icon: GitCompare },
-  { label: "Improve current draft", icon: PenTool },
-  { label: "Summarize active paper", icon: Sparkles },
-];
-
-function ConsoleEmptyState({ onFillInput }: { onFillInput: (text: string) => void }) {
-  return (
-    <div className="flex items-center justify-center min-h-[300px] py-12">
-      <div className="text-center max-w-md">
-        <div className="w-10 h-10 rounded-xl bg-surface-100 flex items-center justify-center mx-auto mb-4">
-          <MessageSquare className="w-5 h-5 text-surface-400" />
-        </div>
-        <h3 className="text-sm font-medium text-surface-700">Workspace Console</h3>
-        <p className="text-xs text-surface-400 mt-1.5 leading-relaxed">
-          Ask about the workspace, compare sources, discover papers, or work on drafts.
-        </p>
-        <div className="mt-4 flex flex-wrap justify-center gap-2">
-          {CONSOLE_ACTIONS.map(({ label, icon: Icon }) => (
-            <button
-              key={label}
-              onClick={() => onFillInput(label)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-surface-600 bg-surface-50 border border-surface-200 rounded-lg hover:bg-surface-100 hover:border-surface-300 transition-colors"
-            >
-              <Icon className="w-3 h-3 text-surface-400" />
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }

@@ -7,10 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
 from app.config import get_settings
+from app.rate_limit import limiter
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from app.db.postgres import AsyncSessionLocal, init_db
-from app.api import papers, sessions, concepts, ws, settings as settings_api, sources, drafts, deep_research, proposal_plan, workspaces
+from app.api import papers, sessions, concepts, ws, settings as settings_api, sources, drafts, deep_research, proposal_plan, workspaces, preferences, workflow_runs
 from app.ingestion.tasks import run_ingestion_job
 from app.models.orm import Paper, PaperStatus
+from app.tracing import flush_tracing
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -46,6 +50,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     await _resume_processing_papers()
     yield
+    flush_tracing()
     logger.info("shutdown")
 
 
@@ -63,6 +68,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 app.include_router(papers.router, prefix="/api/papers", tags=["papers"])
 app.include_router(workspaces.router, prefix="/api/workspaces", tags=["workspaces"])
 app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
@@ -72,6 +80,8 @@ app.include_router(sources.router, prefix="/api/sources", tags=["sources"])
 app.include_router(drafts.router, prefix="/api/drafts", tags=["drafts"])
 app.include_router(deep_research.router, prefix="/api/deep-research", tags=["deep-research"])
 app.include_router(proposal_plan.router, prefix="/api/proposal-plan", tags=["proposal-plan"])
+app.include_router(workflow_runs.router, prefix="/api/workflow-runs", tags=["workflow-runs"])
+app.include_router(preferences.router, prefix="/api/preferences", tags=["preferences"])
 app.include_router(ws.router, prefix="/ws", tags=["websocket"])
 
 

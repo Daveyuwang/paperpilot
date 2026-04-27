@@ -1,0 +1,5 @@
+{
+  "version": "1.0",
+  "description": "Retrieval evaluation dataset. Populate with (query, paper_id, expected_chunk_ids) entries from Langfuse traces + manual annotation.",
+  "entries": []
+}

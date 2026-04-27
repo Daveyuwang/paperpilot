@@ -29,6 +29,7 @@ interface DeliverableStore {
   unlinkSourceFromSection: (workspaceId: string, deliverableId: string, sectionId: string, sourceId: string) => void;
 
   applyAIContent: (workspaceId: string, deliverableId: string, sectionId: string, content: string, mode: "draft" | "revise", sourceIdsUsed: string[]) => void;
+  replaceSections: (workspaceId: string, deliverableId: string, titles: string[]) => void;
   clearWorkspace: (workspaceId: string) => void;
 }
 
@@ -273,6 +274,15 @@ export const useDeliverableStore = create<DeliverableStore>()(
           lastAIMode: mode,
           lastSourceIdsUsed: sourceIdsUsed,
         })))),
+
+      replaceSections: (wid, did, titles) => {
+        const newSections = createCustomSections(titles);
+        set((s) => updateDeliverable(s, wid, did, (d) => ({
+          ...d,
+          sections: newSections,
+          updatedAt: Date.now(),
+        })));
+      },
 
       clearWorkspace: (workspaceId) =>
         set((s) => {

@@ -52,9 +52,18 @@ class Settings(BaseSettings):
     embedding_batch_size: int = 32
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
+    # Langfuse observability
+    langfuse_host: str = ""
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    enable_tracing: bool = False
+
     # Upload
     upload_dir: str = "/app/uploads"
     max_upload_size_mb: int = 50
+    max_upload_pages: int = 200
+    max_concurrent_ingestion: int = 10
+    page_parse_timeout: int = 30
 
     @field_validator("database_url", mode="before")
     @classmethod

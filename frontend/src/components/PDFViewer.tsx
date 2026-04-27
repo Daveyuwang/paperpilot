@@ -112,8 +112,8 @@ export function PDFViewer({ paperId, highlightBboxes, targetPage, jumpCounter }:
 
     try {
       await task.promise;
-    } catch (e: any) {
-      if (e?.name === "RenderingCancelledException") return;
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name === "RenderingCancelledException") return;
       throw e;
     }
 

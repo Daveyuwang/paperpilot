@@ -1,24 +1,24 @@
 import React, { useCallback, useState } from "react";
-import { Upload, Plus } from "lucide-react";
+import { Upload, Plus, AlertTriangle } from "lucide-react";
 import clsx from "clsx";
 import { usePaperStore } from "@/store/paperStore";
 import { useWorkspaceStore } from "@/store/workspaceStore";
 
+const LARGE_FILE_THRESHOLD = 20 * 1024 * 1024; // 20 MB
+
 export function UploadZone() {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const uploadPaper = usePaperStore((s) => s.uploadPaper);
   const papers = usePaperStore((s) => s.papers);
   const hasPapers = papers.length > 0;
   const workspaceId = useWorkspaceStore((s) => s.getActiveWorkspace()?.id);
 
-  const handleFile = useCallback(
+  const doUpload = useCallback(
     async (file: File) => {
-      if (!file.name.toLowerCase().endsWith(".pdf")) {
-        alert("Only PDF files are supported.");
-        return;
-      }
       setIsUploading(true);
+      setPendingFile(null);
       try {
         await uploadPaper(file, workspaceId);
       } catch (e) {
@@ -28,6 +28,21 @@ export function UploadZone() {
       }
     },
     [uploadPaper, workspaceId]
+  );
+
+  const handleFile = useCallback(
+    (file: File) => {
+      if (!file.name.toLowerCase().endsWith(".pdf")) {
+        alert("Only PDF files are supported.");
+        return;
+      }
+      if (file.size > LARGE_FILE_THRESHOLD) {
+        setPendingFile(file);
+        return;
+      }
+      doUpload(file);
+    },
+    [doUpload]
   );
 
   const onDrop = useCallback(
@@ -45,6 +60,37 @@ export function UploadZone() {
     if (file) handleFile(file);
     e.target.value = "";
   };
+
+  if (pendingFile) {
+    const sizeMB = (pendingFile.size / (1024 * 1024)).toFixed(1);
+    return (
+      <div className="flex flex-col gap-2 p-3 rounded-xl border border-amber-300 bg-amber-50 text-xs">
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium text-amber-800">Large PDF ({sizeMB} MB)</p>
+            <p className="text-amber-700 mt-0.5">
+              Processing may take several minutes. Concept map can be generated manually after ingestion.
+            </p>
+          </div>
+        </div>
+        <div className="flex gap-2 justify-end">
+          <button
+            className="px-2.5 py-1 rounded-md text-surface-600 hover:bg-surface-200 transition-colors"
+            onClick={() => setPendingFile(null)}
+          >
+            Cancel
+          </button>
+          <button
+            className="px-2.5 py-1 rounded-md bg-accent-600 text-white hover:bg-accent-700 transition-colors"
+            onClick={() => doUpload(pendingFile)}
+          >
+            Continue
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (hasPapers) {
     return (

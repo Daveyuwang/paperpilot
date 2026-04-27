@@ -3,12 +3,15 @@ import uuid
 import structlog
 import asyncio
 from typing import Any
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.api.guest import require_guest_id
 from app.api.drafts import _resolve_llm, _build_source_context, SourcePayload
+from app.rate_limit import limiter
+from app.workflow_state import create_workflow_run, update_workflow_stage, complete_workflow_run
+from app.models.orm import WorkflowRunType, WorkflowRunStatus
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -714,7 +717,9 @@ async def run_proposal_plan(
 # ── Streaming endpoint ────────────────────────────────────────────────────
 
 @router.post("/run/stream")
+@limiter.limit("3/hour")
 async def run_proposal_plan_stream(
+    request: Request,
     req: ProposalPlanRequest,
     guest_id: str = Depends(require_guest_id),
 ):
@@ -727,6 +732,7 @@ async def run_proposal_plan_stream(
             return f"data: {payload}\n\n"
 
         try:
+            wf_run_id: str | None = None
             # 1. Validate
             yield emit("stage", {"stage": "validating", "message": "Validating input..."})
             await asyncio.sleep(0)
@@ -750,6 +756,18 @@ async def run_proposal_plan_stream(
                 })
                 return
 
+            # ── Workflow persistence: create run ──
+            pp_run_type = WorkflowRunType.proposal if inp.mode == "proposal" else WorkflowRunType.plan
+            try:
+                wf_run_id = await create_workflow_run(
+                    workspace_id=req.workspace_id,
+                    guest_id=guest_id,
+                    run_type=pp_run_type,
+                    input_payload=req.model_dump(),
+                )
+            except Exception as wf_exc:
+                logger.warning("pp_workflow_run_create_failed", error=str(wf_exc))
+
             # 3. Select sources
             yield emit("stage", {"stage": "selecting_context", "message": "Selecting sources and context..."})
             yield emit("activity", {"activity_type": "thinking", "label": "Selecting sources and context..."})
@@ -762,6 +780,16 @@ async def run_proposal_plan_stream(
                     "status": "blocked", "run_id": run_id, "mode": inp.mode,
                     "message": "No sources or deep research context available.",
                 })
+                # ── Workflow persistence: mark blocked ──
+                if wf_run_id:
+                    try:
+                        await complete_workflow_run(
+                            wf_run_id,
+                            status=WorkflowRunStatus.failed,
+                            error={"message": "No sources or deep research context available"},
+                        )
+                    except Exception:
+                        pass
                 return
 
             yield emit("progress", {
@@ -776,6 +804,12 @@ async def run_proposal_plan_stream(
             else:
                 yield emit("stage", {"stage": "generating_outline", "message": "Generating tailored outline..."})
                 yield emit("activity", {"activity_type": "thinking", "label": "Generating tailored outline..."})
+                # ── Workflow persistence: update stage ──
+                if wf_run_id:
+                    try:
+                        await update_workflow_stage(wf_run_id, stage="generating_outline")
+                    except Exception:
+                        pass
                 generated_title, tailored_titles = await _generate_tailored_outline(llm, inp, selected, dr_context_text)
                 sections = [(f"new-{i}", title, "") for i, title in enumerate(tailored_titles)]
                 yield emit("tailored_outline", {
@@ -793,6 +827,12 @@ async def run_proposal_plan_stream(
                 "stage": "drafting", "message": "Drafting sections...",
                 "total_sections": len(sections),
             })
+            # ── Workflow persistence: update stage ──
+            if wf_run_id:
+                try:
+                    await update_workflow_stage(wf_run_id, stage="drafting")
+                except Exception:
+                    pass
 
             source_ctx, used_ids = _build_source_context(selected)
             if inp.mode == "proposal":
@@ -910,6 +950,16 @@ async def run_proposal_plan_stream(
                         "deep_research_context_ids": dr_context_ids,
                     },
                 })
+                # ── Workflow persistence: mark failed ──
+                if wf_run_id:
+                    try:
+                        await complete_workflow_run(
+                            wf_run_id,
+                            status=WorkflowRunStatus.failed,
+                            error={"message": f"All {doc_type} sections failed to generate"},
+                        )
+                    except Exception:
+                        pass
             else:
                 yield emit("result", {
                     "status": "completed", "run_id": run_id, "mode": inp.mode,
@@ -924,6 +974,20 @@ async def run_proposal_plan_stream(
                         "summary": f"Drafted {drafted_count} {doc_type} section(s), skipped {len(skipped_ids)}. Used {len(selected_ids)} source(s).",
                     },
                 })
+                # ── Workflow persistence: mark completed ──
+                if wf_run_id:
+                    try:
+                        await complete_workflow_run(
+                            wf_run_id,
+                            status=WorkflowRunStatus.completed,
+                            artifacts={
+                                "drafted_count": drafted_count,
+                                "skipped_count": len(skipped_ids),
+                                "sources_used": len(selected_ids),
+                            },
+                        )
+                    except Exception:
+                        pass
 
         except Exception as exc:
             logger.exception("pp_stream_unexpected_error", error=str(exc))
@@ -931,5 +995,15 @@ async def run_proposal_plan_stream(
                 "status": "failed", "run_id": run_id, "mode": inp.mode,
                 "message": f"Unexpected error during run: {str(exc)[:200]}",
             })
+            # ── Workflow persistence: mark failed (exception) ──
+            if wf_run_id:
+                try:
+                    await complete_workflow_run(
+                        wf_run_id,
+                        status=WorkflowRunStatus.failed,
+                        error={"message": str(exc)[:500]},
+                    )
+                except Exception:
+                    pass
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

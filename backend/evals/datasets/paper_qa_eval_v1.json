@@ -1,0 +1,5 @@
+{
+  "version": "1.0",
+  "description": "Paper QA evaluation dataset. Populate with (paper_id, question, ground_truth_answer) entries.",
+  "entries": []
+}

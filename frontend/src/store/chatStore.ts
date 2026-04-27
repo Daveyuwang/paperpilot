@@ -359,7 +359,7 @@ export const useChatStore = create<ChatState>()(
       setCurrentScopeLabel: (label) => set({ currentScopeLabel: label }),
 
       markQuestionCovered: (id) =>
-        set((s: any) => ({
+        set((s) => ({
           coveredQuestionIds: s.coveredQuestionIds.includes(id)
             ? s.coveredQuestionIds
             : [...s.coveredQuestionIds, id],

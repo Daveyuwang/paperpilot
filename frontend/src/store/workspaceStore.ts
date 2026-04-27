@@ -88,7 +88,7 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
             patch.activeWorkspaceId = null;
             patch.appView = "home";
           }
-          return patch as any;
+          return patch as Partial<WorkspaceStore>;
         });
       },
 
@@ -150,19 +150,19 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
         if (!state) return;
 
         // Migrate from old single-workspace shape
-        const raw = state as any;
+        const raw = state as unknown as Record<string, unknown>;
         if (raw.workspace && !raw.workspaces) {
-          const old = raw.workspace;
+          const old = raw.workspace as Record<string, unknown>;
           const now = Date.now();
           const migrated: Workspace = {
             id: "default",
-            title: old.title || "My Research Workspace",
-            objective: old.objective || "",
+            title: (old.title as string) || "My Research Workspace",
+            objective: (old.objective as string) || "",
             createdAt: now,
             updatedAt: now,
-            activePaperId: old.activePaperId ?? null,
-            activeViewerTab: VALID_VIEWER_TABS.includes(old.activeViewerTab)
-              ? old.activeViewerTab
+            activePaperId: (old.activePaperId as string) ?? null,
+            activeViewerTab: VALID_VIEWER_TABS.includes(old.activeViewerTab as ViewerTab)
+              ? (old.activeViewerTab as ViewerTab)
               : old.activeViewerTab === "trail" ? "agenda" : "reader",
           };
           state.workspaces = { default: migrated };

@@ -168,3 +168,44 @@ class LLMSettingsOut(BaseModel):
     has_key: bool = False
     model: str = "claude-sonnet-4-6"
     language: str = "en"
+
+
+# ── User Preferences ─────────────────────────────────────────────────────
+
+class UserPreferencesOut(BaseModel):
+    guest_id: str
+    terminology: dict | None = None
+    citation_style: str | None = None
+    research_domains: list[str] | None = None
+    writing_style: dict | None = None
+    custom_instructions: str | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class UserPreferencesUpdate(BaseModel):
+    terminology: dict | None = None
+    citation_style: str | None = None
+    research_domains: list[str] | None = None
+    writing_style: dict | None = None
+    custom_instructions: str | None = None
+
+
+# ── Workflow Runs ─────────────────────────────────────────────────────────
+
+class WorkflowRunOut(BaseModel):
+    id: str
+    workspace_id: str
+    run_type: str
+    status: str
+    current_stage: str | None
+    stages_completed: list[str] | None
+    error: dict | None
+    token_usage: dict | None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+
+    class Config:
+        from_attributes = True

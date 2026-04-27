@@ -24,8 +24,8 @@ async def fetch_external_background(concept: str) -> str:
     Args:
         concept: The concept or term to look up (e.g., 'attention mechanism', 'BERT', 'cross-entropy loss').
     """
-    # Try Wikipedia first
-    try:
+    # ── Try Wikipedia first (with circuit breaker) ────────────────────────
+    async def _wikipedia_fetch() -> str | None:
         async with httpx.AsyncClient(timeout=8) as client:
             resp = await client.get(
                 "https://en.wikipedia.org/api/rest_v1/page/summary/"
@@ -35,10 +35,33 @@ async def fetch_external_background(concept: str) -> str:
                 extract = resp.json().get("extract", "")
                 if extract and len(extract) > 50:
                     return f"Wikipedia — {concept}: {extract[:700]}"
+        return None
+
+    wiki_result: str | None = None
+    try:
+        from app.circuit_breaker import wikipedia_breaker, PYBREAKER_AVAILABLE
+
+        if PYBREAKER_AVAILABLE:
+            import pybreaker
+
+            try:
+                wiki_result = await wikipedia_breaker.call_async(_wikipedia_fetch)
+            except pybreaker.CircuitBreakerError:
+                logger.warning("wikipedia_circuit_open", concept=concept)
+        else:
+            wiki_result = await _wikipedia_fetch()
+    except ImportError:
+        try:
+            wiki_result = await _wikipedia_fetch()
+        except Exception as exc:
+            logger.warning("wikipedia_fetch_failed", concept=concept, error=str(exc))
     except Exception as exc:
         logger.warning("wikipedia_fetch_failed", concept=concept, error=str(exc))
 
-    # Fallback to Tavily web search
+    if wiki_result:
+        return wiki_result
+
+    # ── Fallback to Tavily web search ─────────────────────────────────────
     settings = get_settings()
     if settings.web_search_enabled and settings.tavily_api_key:
         try:

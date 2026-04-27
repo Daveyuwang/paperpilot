@@ -38,7 +38,27 @@ async def tavily_search(
                 logger.warning("tavily_search_failed", query=query, error=str(exc))
                 return []
 
-    all_raw = await asyncio.gather(*[_single_search(q) for q in queries])
+    # ── Circuit-breaker wrapper ───────────────────────────────────────────
+    try:
+        from app.circuit_breaker import tavily_breaker, PYBREAKER_AVAILABLE
+
+        if PYBREAKER_AVAILABLE:
+            import pybreaker
+
+            async def _guarded_gather() -> list[list[dict]]:
+                return await tavily_breaker.call_async(
+                    asyncio.gather, *[_single_search(q) for q in queries]
+                )
+
+            try:
+                all_raw = await _guarded_gather()
+            except pybreaker.CircuitBreakerError:
+                logger.warning("tavily_circuit_open")
+                return []
+        else:
+            all_raw = await asyncio.gather(*[_single_search(q) for q in queries])
+    except ImportError:
+        all_raw = await asyncio.gather(*[_single_search(q) for q in queries])
 
     for batch in all_raw:
         for item in batch:

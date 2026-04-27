@@ -7,6 +7,7 @@ import structlog
 
 from app.ingestion.celery_app import celery_app
 from app.config import get_settings
+from app.tracing import create_trace, trace_span
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -53,6 +54,16 @@ def run_ingestion_job(paper_id: str, pdf_path: str) -> dict:
                     paper.error_message = error
                 db.commit()
 
+    def _update_ingestion_stage(stage: str, progress: int, error_detail: dict | None = None):
+        with SyncSession(engine) as db:
+            paper = db.get(Paper, paper_id)
+            if paper:
+                paper.ingestion_stage = stage
+                paper.ingestion_progress = progress
+                if error_detail:
+                    paper.ingestion_error_detail = error_detail
+                db.commit()
+
     def _reset_derived_artifacts():
         # Make restart recovery idempotent: a resumed ingestion should replace
         # chunks / guide questions / concept map from any interrupted prior run.
@@ -74,24 +85,48 @@ def run_ingestion_job(paper_id: str, pdf_path: str) -> dict:
     try:
         _update_status(PaperStatus.processing)
         _reset_derived_artifacts()
+        _update_ingestion_stage("uploaded", 5)
         logger.info("ingestion_start", paper_id=paper_id)
 
+        trace = create_trace(name="ingestion", metadata={"paper_id": paper_id})
+
         # ── 1. Parse PDF ──────────────────────────────────────────────────
-        parsed = parse_pdf(pdf_path)
+        with trace_span(trace, name="parse_pdf"):
+            parsed = parse_pdf(pdf_path)
+        _update_ingestion_stage("text_extracted", 20)
+        page_char_counts = parsed.get("page_char_counts", [])
+        if page_char_counts:
+            logger.info("page_char_stats", paper_id=paper_id,
+                        pages=len(page_char_counts),
+                        median=sorted(page_char_counts)[len(page_char_counts) // 2] if page_char_counts else 0,
+                        confidence=parsed["confidence"])
         if _abort_if_deleted("after_parse"):
             return {"paper_id": paper_id, "status": "deleted"}
         used_nougat = False
 
         if parsed["confidence"] < CONFIDENCE_THRESHOLD:
             logger.info("low_confidence_using_nougat", paper_id=paper_id, confidence=parsed["confidence"])
-            parsed = parse_pdf_nougat(pdf_path)
+            with trace_span(trace, name="parse_pdf_nougat"):
+                parsed = parse_pdf_nougat(pdf_path)
+            _update_ingestion_stage("text_extracted", 20)
             if _abort_if_deleted("after_nougat"):
                 return {"paper_id": paper_id, "status": "deleted"}
             used_nougat = True
 
+        # ── Page count validation ─────────────────────────────────────────
+        page_count = parsed.get("page_count") or 0
+        if page_count > settings.max_upload_pages:
+            error_msg = f"PDF has {page_count} pages, exceeding the {settings.max_upload_pages}-page limit."
+            logger.warning("ingestion_page_limit_exceeded", paper_id=paper_id, page_count=page_count)
+            _update_ingestion_stage("failed", 0, error_detail={"reason": "page_limit_exceeded", "page_count": page_count})
+            _update_status(PaperStatus.error, error=error_msg)
+            return {"paper_id": paper_id, "status": "error", "error": error_msg}
+
         # ── 2. Chunk ──────────────────────────────────────────────────────
-        raw_chunks = parsed["raw_chunks"]
-        chunks = split_into_chunks(raw_chunks)
+        with trace_span(trace, name="chunk"):
+            raw_chunks = parsed["raw_chunks"]
+            chunks = split_into_chunks(raw_chunks)
+        _update_ingestion_stage("chunked", 35)
         logger.info("chunks_created", paper_id=paper_id, count=len(chunks))
         if _abort_if_deleted("after_chunking"):
             return {"paper_id": paper_id, "status": "deleted"}
@@ -136,8 +171,10 @@ def run_ingestion_job(paper_id: str, pdf_path: str) -> dict:
             return {"paper_id": paper_id, "status": "deleted"}
 
         # ── 4. Embed → Qdrant ─────────────────────────────────────────────
-        text_chunks = [c for c in chunks if c.get("content_type", "text") == "text"]
-        embeddings = embed_chunks([c["content"] for c in text_chunks])
+        with trace_span(trace, name="embed"):
+            text_chunks = [c for c in chunks if c.get("content_type", "text") == "text"]
+            embeddings = embed_chunks([c["content"] for c in text_chunks])
+        _update_ingestion_stage("embedded", 55)
         if _abort_if_deleted("after_embedding"):
             return {"paper_id": paper_id, "status": "deleted"}
         upsert_chunks(paper_id, text_chunks, embeddings)
@@ -154,12 +191,14 @@ def run_ingestion_job(paper_id: str, pdf_path: str) -> dict:
             return {"paper_id": paper_id, "status": "deleted"}
 
         # ── 5. BM25 index → Redis ─────────────────────────────────────────
-        bm25 = build_bm25_index([c["content"] for c in chunks])
-        serialized = serialize_bm25(bm25, [c["id"] for c in chunks])
-        import redis as sync_redis
-        r = sync_redis.from_url(settings.redis_url, decode_responses=False)
-        r.setex(f"bm25:{paper_id}", 60 * 60 * 72, serialized)
+        with trace_span(trace, name="bm25"):
+            bm25 = build_bm25_index([c["content"] for c in chunks])
+            serialized = serialize_bm25(bm25, [c["id"] for c in chunks])
+            import redis as sync_redis
+            r = sync_redis.from_url(settings.redis_url, decode_responses=False)
+            r.setex(f"bm25:{paper_id}", 60 * 60 * 72, serialized)
         logger.info("bm25_index_stored", paper_id=paper_id)
+        _update_ingestion_stage("embedded", 65)
         if _abort_if_deleted("after_bm25"):
             return {"paper_id": paper_id, "status": "deleted"}
 
@@ -190,17 +229,18 @@ def run_ingestion_job(paper_id: str, pdf_path: str) -> dict:
         if language_pref == "zh-Hant":
             language_pref = "zh-TW"
 
-        questions = generate_question_trail(
-            title=parsed.get("title", ""),
-            abstract=parsed.get("abstract", ""),
-            section_headers=parsed.get("section_headers", []),
-            guest_id=guest_id_for_llm,
-            language=language_pref,
-            protocol=llm_protocol,
-            base_url=llm_base_url,
-            api_key=llm_api_key,
-            model=llm_model,
-        )
+        with trace_span(trace, name="scaffold"):
+            questions = generate_question_trail(
+                title=parsed.get("title", ""),
+                abstract=parsed.get("abstract", ""),
+                section_headers=parsed.get("section_headers", []),
+                guest_id=guest_id_for_llm,
+                language=language_pref,
+                protocol=llm_protocol,
+                base_url=llm_base_url,
+                api_key=llm_api_key,
+                model=llm_model,
+            )
         if _abort_if_deleted("after_scaffold_generate"):
             return {"paper_id": paper_id, "status": "deleted"}
         with SyncSession(engine) as db:
@@ -215,18 +255,13 @@ def run_ingestion_job(paper_id: str, pdf_path: str) -> dict:
                 ))
             db.commit()
         logger.info("guide_questions_stored", paper_id=paper_id, count=len(questions))
+        _update_ingestion_stage("scaffolded", 80)
         if _abort_if_deleted("after_scaffold_store"):
             return {"paper_id": paper_id, "status": "deleted"}
 
         _update_status(PaperStatus.ready)
+        _update_ingestion_stage("ready", 100)
         logger.info("ingestion_ready", paper_id=paper_id)
-
-        # Kick off concept map generation in background (does not block readiness).
-        try:
-            regenerate_concept_map.apply_async(args=[paper_id], queue="default")
-            logger.info("concept_map_queued", paper_id=paper_id)
-        except Exception as exc:
-            logger.warning("concept_map_queue_failed", paper_id=paper_id, error=str(exc))
 
         logger.info("ingestion_complete", paper_id=paper_id)
         return {"paper_id": paper_id, "status": "ready"}
@@ -234,6 +269,7 @@ def run_ingestion_job(paper_id: str, pdf_path: str) -> dict:
     except Exception as exc:
         logger.exception("ingestion_failed", paper_id=paper_id, error=str(exc))
         _update_status(PaperStatus.error, error=str(exc))
+        _update_ingestion_stage("failed", 0, error_detail={"error": str(exc)[:500]})
         raise
 
 

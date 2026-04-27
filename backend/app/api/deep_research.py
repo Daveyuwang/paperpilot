@@ -4,12 +4,13 @@ import time
 import structlog
 import asyncio
 from typing import Any
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.api.guest import require_guest_id
 from app.api.sources import DiscoveredSource as DiscoveredSourceModel
+from app.rate_limit import limiter
 from app.api.drafts import _resolve_llm
 
 from app.deep_research.graph import compiled_graph
@@ -19,6 +20,9 @@ from app.deep_research.config import DEPTH_CONFIG
 from app.deep_research.prompts import PLAN_SYSTEM, PLAN_USER
 from app.deep_research.llm_factory import make_llm as make_dr_llm
 from app.llm.client import LLMClient
+from app.workflow_state import create_workflow_run, update_workflow_stage, complete_workflow_run
+from app.models.orm import WorkflowRunType, WorkflowRunStatus
+from app.tracing import create_trace, get_langfuse_callback_handler
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -487,7 +491,9 @@ async def run_deep_research(
 # ── Streaming endpoint ──────────────────────────────────────────────────────
 
 @router.post("/run/stream")
+@limiter.limit("3/hour")
 async def run_deep_research_stream(
+    request: Request,
     req: DeepResearchRequest,
     guest_id: str = Depends(require_guest_id),
 ):
@@ -501,6 +507,7 @@ async def run_deep_research_stream(
         try:
             # Skip validation when pre_plan is provided (already validated during generate-plan)
             has_pre_plan = req.pre_plan is not None
+            wf_run_id: str | None = None
 
             if not has_pre_plan:
                 # Validate
@@ -538,6 +545,17 @@ async def run_deep_research_stream(
                     })
                     return
 
+            # ── Workflow persistence: create run ──
+            try:
+                wf_run_id = await create_workflow_run(
+                    workspace_id=req.workspace_id,
+                    guest_id=guest_id,
+                    run_type=WorkflowRunType.deep_research,
+                    input_payload=req.model_dump(),
+                )
+            except Exception as wf_exc:
+                logger.warning("dr_workflow_run_create_failed", error=str(wf_exc))
+
             initial_state = _build_initial_state(req, llm.resolved.api_key, llm.resolved.base_url, llm.resolved.model)
 
             if has_pre_plan:
@@ -558,8 +576,17 @@ async def run_deep_research_stream(
             final_report = None
             last_event_time = asyncio.get_event_loop().time()
 
+            trace = create_trace(
+                name="deep_research",
+                workspace_id=req.workspace_id,
+                guest_id=guest_id,
+                run_id=run_id,
+            )
+            callback_handler = get_langfuse_callback_handler(trace)
+            stream_config = {"callbacks": [callback_handler]} if callback_handler else {}
+
             async for event in compiled_graph.astream_events(
-                initial_state, version="v2"
+                initial_state, version="v2", config=stream_config,
             ):
                 kind = event.get("event", "")
                 name = event.get("name", "")
@@ -587,6 +614,12 @@ async def run_deep_research_stream(
                     }
                     stage, msg = stage_map.get(name, (name, f"Running {name}..."))
                     yield emit("stage", {"stage": stage, "message": msg})
+                    # ── Workflow persistence: update stage ──
+                    if wf_run_id:
+                        try:
+                            await update_workflow_stage(wf_run_id, stage=stage)
+                        except Exception:
+                            pass
                     last_event_time = now
 
                 # ── Custom events from nodes (dispatch_custom_event) ──
@@ -767,6 +800,16 @@ async def run_deep_research_stream(
                             "Please check your Tavily API key and network connectivity."
                         ),
                     })
+                    # ── Workflow persistence: mark failed ──
+                    if wf_run_id:
+                        try:
+                            await complete_workflow_run(
+                                wf_run_id,
+                                status=WorkflowRunStatus.failed,
+                                error={"message": "All sub-questions failed"},
+                            )
+                        except Exception:
+                            pass
                 else:
                     result = _report_to_result(final_report, run_id)
                     yield emit("tailored_outline", {
@@ -799,11 +842,34 @@ async def run_deep_research_stream(
                             "generated_outline": result.generated_outline,
                         },
                     })
+                    # ── Workflow persistence: mark completed ──
+                    if wf_run_id:
+                        try:
+                            await complete_workflow_run(
+                                wf_run_id,
+                                status=WorkflowRunStatus.completed,
+                                artifacts={
+                                    "generated_title": result.generated_title,
+                                    "section_count": len(result.section_updates),
+                                },
+                            )
+                        except Exception:
+                            pass
             else:
                 yield emit("result", {
                     "status": "failed", "run_id": run_id,
                     "message": "Research completed but produced no report.",
                 })
+                # ── Workflow persistence: mark failed (no report) ──
+                if wf_run_id:
+                    try:
+                        await complete_workflow_run(
+                            wf_run_id,
+                            status=WorkflowRunStatus.failed,
+                            error={"message": "No report produced"},
+                        )
+                    except Exception:
+                        pass
 
         except Exception as exc:
             logger.exception("dr_stream_unexpected_error", error=str(exc))
@@ -811,5 +877,15 @@ async def run_deep_research_stream(
                 "status": "failed", "run_id": run_id,
                 "message": f"Unexpected error during research run: {str(exc)[:200]}",
             })
+            # ── Workflow persistence: mark failed (exception) ──
+            if wf_run_id:
+                try:
+                    await complete_workflow_run(
+                        wf_run_id,
+                        status=WorkflowRunStatus.failed,
+                        error={"message": str(exc)[:500]},
+                    )
+                except Exception:
+                    pass
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

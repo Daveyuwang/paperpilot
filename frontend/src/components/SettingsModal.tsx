@@ -68,10 +68,10 @@ export function SettingsModal({ open, onClose }: Props) {
         setBaseUrl((r.protocol === "openai" || r.protocol === "gemini" || r.protocol === "anthropic")
           ? defaultBaseUrlForProtocol
           : (r.base_url ?? ""));
-        setModel((r as any).model ?? "claude-sonnet-4-6");
-        setLanguage((r as any).language ?? "en");
+        setModel(r.model ?? "claude-sonnet-4-6");
+        setLanguage(r.language ?? "en");
         setRemoteHasKey(r.has_key);
-        setLLMSettingsLocal({ protocol: r.protocol, baseUrl: r.base_url ?? "", hasKey: r.has_key, language: (r as any).language ?? "en" });
+        setLLMSettingsLocal({ protocol: r.protocol, baseUrl: r.base_url ?? "", hasKey: r.has_key, language: r.language ?? "en" });
       })
       .catch((e) => {
         setError(String(e?.message ?? e));
@@ -277,13 +277,13 @@ export function SettingsModal({ open, onClose }: Props) {
                 setRemoteHasKey(r.has_key);
                 setProtocol(r.protocol);
                 setBaseUrl(r.base_url ?? "");
-                setModel((r as any).model ?? "claude-sonnet-4-6");
-                setLanguage((r as any).language ?? "en");
+                setModel(r.model ?? "claude-sonnet-4-6");
+                setLanguage(r.language ?? "en");
                 setApiKey("");
-                setLLMSettingsLocal({ protocol: r.protocol, baseUrl: r.base_url ?? "", hasKey: r.has_key, language: (r as any).language ?? "en" });
+                setLLMSettingsLocal({ protocol: r.protocol, baseUrl: r.base_url ?? "", hasKey: r.has_key, language: r.language ?? "en" });
                 setSuccess("Cleared server-side settings.");
-              } catch (e: any) {
-                setError(String(e?.message ?? e));
+              } catch (e: unknown) {
+                setError(e instanceof Error ? e.message : String(e));
               } finally {
                 setClearing(false);
               }
@@ -320,10 +320,10 @@ export function SettingsModal({ open, onClose }: Props) {
                   });
                   setRemoteHasKey(r.has_key);
                   setApiKey("");
-                  setLLMSettingsLocal({ protocol: r.protocol, baseUrl: r.base_url ?? "", hasKey: r.has_key, language: (r as any).language ?? language ?? "en" });
+                  setLLMSettingsLocal({ protocol: r.protocol, baseUrl: r.base_url ?? "", hasKey: r.has_key, language: r.language ?? language ?? "en" });
                   setSuccess("Saved.");
-                } catch (e: any) {
-                  setError(String(e?.message ?? e));
+                } catch (e: unknown) {
+                  setError(e instanceof Error ? e.message : String(e));
                 } finally {
                   setSaving(false);
                 }

@@ -158,7 +158,7 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
       const sessionState = await api
         .getSessionState(activeSession?.id ?? "")
         .catch(() => ({}));
-      return (sessionState as any).covered_question_ids ?? [];
+      return (sessionState as Record<string, unknown>).covered_question_ids as string[] ?? [];
     }
 
     set({ isLoading: true, error: null });
@@ -220,6 +220,13 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
       } else {
         useChatStore.getState().clearChat();
       }
+    }
+
+    const { useSourceStore } = await import("@/store/sourceStore");
+    const sources = useSourceStore.getState().getSources(wsId);
+    const matchingSource = sources.find((s) => s.paper_id === id);
+    if (matchingSource) {
+      useSourceStore.getState().removeSource(wsId, matchingSource.id);
     }
 
     try {
@@ -299,8 +306,8 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
     let paper: Paper;
     try {
       paper = await api.getPaper(stored.paperId);
-    } catch (e: any) {
-      if (String(e?.message ?? "").includes("404")) clearActive(wsId);
+    } catch (e: unknown) {
+      if (e instanceof Error && e.message.includes("404")) clearActive(wsId);
       return null;
     }
     if (paper.status !== "ready") return null;

@@ -80,7 +80,7 @@ export function TrailTracker({ onAsk }: Props) {
     if (onAsk) {
       onAsk({ id: q.id, question: q.question });
     } else {
-      (window as any).__askGuideQuestion?.({ id: q.id, question: q.question });
+      (window as Window & { __askGuideQuestion?: (q: { id: string; question: string }) => void }).__askGuideQuestion?.({ id: q.id, question: q.question });
     }
   };
 

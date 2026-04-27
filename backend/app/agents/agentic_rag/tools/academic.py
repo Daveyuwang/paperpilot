@@ -31,7 +31,7 @@ async def search_academic_papers(query: str, max_results: int = 5) -> list[dict]
     if settings.semantic_scholar_api_key:
         headers["x-api-key"] = settings.semantic_scholar_api_key
 
-    try:
+    async def _do_search() -> list[dict]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{SEMANTIC_SCHOLAR_API}/paper/search",
@@ -60,6 +60,26 @@ async def search_academic_papers(query: str, max_results: int = 5) -> list[dict]
                 }
                 for p in data
             ]
+
+    try:
+        from app.circuit_breaker import semantic_scholar_breaker, PYBREAKER_AVAILABLE
+
+        if PYBREAKER_AVAILABLE:
+            import pybreaker
+
+            try:
+                return await semantic_scholar_breaker.call_async(_do_search)
+            except pybreaker.CircuitBreakerError:
+                logger.warning("semantic_scholar_circuit_open")
+                return []
+        else:
+            return await _do_search()
+    except ImportError:
+        try:
+            return await _do_search()
+        except Exception as exc:
+            logger.warning("semantic_scholar_search_error", error=str(exc))
+            return []
     except Exception as exc:
         logger.warning("semantic_scholar_search_error", error=str(exc))
         return []

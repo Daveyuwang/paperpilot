@@ -1,5 +1,6 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { useProposalPlanStore, type PPStatus } from "@/store/proposalPlanStore";
+import type { ActivityEvent } from "@/store/deepResearchStore";
 import { useDeliverableStore } from "@/store/deliverableStore";
 import { useSourceStore } from "@/store/sourceStore";
 import { useAgendaStore } from "@/store/agendaStore";
@@ -20,8 +21,12 @@ export function useProposalPlanRun(workspaceId: string) {
   const sources = getIncludedSources(workspaceId);
   const allDeliverables = deliverableStore.getDeliverables(workspaceId);
   const drDeliverables = allDeliverables.filter((d) => d.type === "deep_research");
+  const abortRef = useRef<AbortController | null>(null);
 
   const runStream = useCallback(async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     startRun();
 
     const wsSources = sources.map((s) => ({
@@ -80,6 +85,7 @@ export function useProposalPlanRun(workspaceId: string) {
 
     try {
       await api.runProposalPlanStream(payload, (event) => {
+        if (controller.signal.aborted) return;
         const s = useProposalPlanStore.getState();
         const type = event.type as string;
 
@@ -106,7 +112,7 @@ export function useProposalPlanRun(workspaceId: string) {
         } else if (type === "activity") {
           const actType = (event.activity_type as string) || "thinking";
           const label = (event.label as string) || "Working...";
-          s.pushActivity({ type: actType as any, label, status: "active" });
+          s.pushActivity({ type: actType as ActivityEvent["type"], label, status: "active" });
           if (actType !== "done") s.setCurrentActivity(label);
         } else if (type === "progress") {
           if (event.sources_selected !== undefined) s.setSourcesSelected(event.sources_selected as number);
@@ -228,13 +234,14 @@ export function useProposalPlanRun(workspaceId: string) {
             setSelectedNav("reader");
           }
         }
-      });
+      }, controller.signal);
 
       const finalStatus = useProposalPlanStore.getState().status;
       if (!["completed", "failed", "blocked", "needs_clarification"].includes(finalStatus)) {
         setFailed("Stream ended unexpectedly. Please try again.");
       }
     } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setFailed(err instanceof Error ? err.message : "Request failed");
     }
   }, [input, sources, workspaceId, activePaper, allDeliverables, drDeliverables, startRun, setFailed, deliverableStore, agendaStore, setActiveViewerTab, setSelectedNav]);
