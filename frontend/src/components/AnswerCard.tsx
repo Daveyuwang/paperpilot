@@ -122,12 +122,12 @@ function ScopeBadge({ label, mode, canExpand, onOverride }: ScopeBadgeProps) {
 
   const overrideActions: { label: string; type: string }[] = [];
   if (mode === "paper_understanding" && canExpand) {
-    overrideActions.push({ label: "Search beyond this paper", type: "expand" });
-    overrideActions.push({ label: "Explain more broadly", type: "explain" });
+    overrideActions.push({ label: "Search external sources", type: "expand" });
+    overrideActions.push({ label: "Add broader context", type: "explain" });
   } else if (mode === "concept_explanation") {
-    overrideActions.push({ label: "Answer from paper only", type: "paper_only" });
+    overrideActions.push({ label: "Use paper only", type: "paper_only" });
   } else if (mode === "external_expansion" || mode === "expansion") {
-    overrideActions.push({ label: "Answer from paper only", type: "paper_only" });
+    overrideActions.push({ label: "Use paper only", type: "paper_only" });
   }
 
   return (
@@ -224,7 +224,7 @@ function EvidenceBlock({
 
   return (
     <div className="mb-4">
-      <h4 className="text-[11px] uppercase tracking-widest text-surface-500 mb-2">Key Evidence</h4>
+      <h4 className="mb-2 text-xs font-semibold text-surface-600">Evidence</h4>
       <div className="space-y-2">
         {valid.map((item, i) => {
           const passage = cleanPassage(item.passage);
@@ -253,7 +253,7 @@ function EvidenceBlock({
                 <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] ${
                   isExplicit ? "bg-emerald-50 text-emerald-700" : "bg-purple-50 text-purple-700"
                 }`}>
-                  {isExplicit ? "explicit" : "inferred"}
+                  {isExplicit ? "Stated" : "Inferred"}
                 </span>
               </div>
             </div>
@@ -271,7 +271,7 @@ function PaperContextBlock({ text }: { text: string }) {
   if (!cleaned) return null;
   return (
     <div className="mb-4">
-      <h4 className="text-[11px] uppercase tracking-widest text-surface-500 mb-2">In This Paper</h4>
+      <h4 className="mb-2 text-xs font-semibold text-surface-600">Paper context</h4>
       <div className="rounded-lg bg-teal-50 border border-teal-200 px-3 py-2.5">
         <p className="text-sm text-teal-800 leading-relaxed">{cleaned}</p>
       </div>
@@ -285,7 +285,7 @@ function PlainLanguageBlock({ text }: { text: string }) {
   if (!text?.trim()) return null;
   return (
     <div className="mb-4">
-      <h4 className="text-[11px] uppercase tracking-widest text-surface-500 mb-2">In Plain Language</h4>
+      <h4 className="mb-2 text-xs font-semibold text-surface-600">Plain language</h4>
       <div className="rounded-lg bg-surface-50 border border-surface-200 px-3 py-2.5">
         <MarkdownRenderer content={text} />
       </div>
@@ -299,7 +299,7 @@ function BiggerPictureBlock({ text }: { text: string }) {
   if (!text?.trim()) return null;
   return (
     <div className="mb-4">
-      <h4 className="text-[11px] uppercase tracking-widest text-surface-500 mb-2">Bigger Picture</h4>
+      <h4 className="mb-2 text-xs font-semibold text-surface-600">Why it matters</h4>
       <MarkdownRenderer content={text} className="text-surface-500" />
     </div>
   );
@@ -342,18 +342,18 @@ function KeyPointsBlock({ points }: { points: string[] }) {
 function ExpansionFailureCard({ mode }: { mode: string }) {
   const isExpansion = mode === "external_expansion" || mode === "expansion";
   const title = isExpansion
-    ? "Couldn't find enough usable external support"
-    : "No answer could be generated";
+    ? "Not enough external evidence"
+    : "No answer yet";
 
   const suggestions = isExpansion
     ? [
-        { label: "Try a broader question", hint: "Widen the scope or simplify the query" },
-        { label: "Search sources first", hint: "Use Deep Research or Sources to gather material" },
-        { label: "Ask something more specific", hint: "Narrow down to a concrete sub-question" },
+        "Broaden the question",
+        "Add more sources",
+        "Ask about one specific point",
       ]
     : [
-        { label: "Rephrase the question", hint: "Try different wording or more context" },
-        { label: "Ask about a specific section", hint: "Focus on a particular part of the paper" },
+        "Rephrase with more context",
+        "Ask about a specific section",
       ];
 
   return (
@@ -362,14 +362,11 @@ function ExpansionFailureCard({ mode }: { mode: string }) {
         <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
         <span className="text-sm font-medium text-amber-800">{title}</span>
       </div>
-      <div className="space-y-1.5 ml-6">
+      <ul className="ml-10 list-disc space-y-1 text-xs text-amber-700">
         {suggestions.map((s, i) => (
-          <div key={i} className="text-xs">
-            <span className="text-amber-700 font-medium">{s.label}</span>
-            <span className="text-amber-600 ml-1">— {s.hint}</span>
-          </div>
+          <li key={i}>{s}</li>
         ))}
-      </div>
+      </ul>
     </div>
   );
 }
@@ -423,7 +420,7 @@ export default function AnswerCard({
   return (
     <div className="text-sm w-full">
       {/* Scope badge — only shown for paper QA after phase1Complete */}
-      {showScopeBadge && !isConsole && (
+      {showScopeBadge && (
         <ScopeBadge
           label={scopeLabel}
           mode={mode}

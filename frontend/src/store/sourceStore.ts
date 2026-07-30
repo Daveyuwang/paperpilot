@@ -3,16 +3,23 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import type { WorkspaceSource, SourceLabel, DiscoveredSource, PaperListItem, Paper } from "@/types";
 
 function normalizeTitle(t: string): string {
-  return t.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return (t.normalize("NFKC").toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join("");
+}
+
+function findDuplicateIndex(existing: WorkspaceSource[], candidate: { doi?: string | null; arxiv_id?: string | null; title: string }): number {
+  const candidateTitle = normalizeTitle(candidate.title);
+  for (let index = 0; index < existing.length; index += 1) {
+    const s = existing[index];
+    if (candidate.doi && s.doi && candidate.doi.toLowerCase() === s.doi.toLowerCase()) return index;
+    if (candidate.arxiv_id && s.arxiv_id && candidate.arxiv_id.toLowerCase() === s.arxiv_id.toLowerCase()) return index;
+    const existingTitle = normalizeTitle(s.title);
+    if (candidateTitle && existingTitle && candidateTitle === existingTitle) return index;
+  }
+  return -1;
 }
 
 function isDuplicateIn(existing: WorkspaceSource[], candidate: { doi?: string | null; arxiv_id?: string | null; title: string }): boolean {
-  for (const s of existing) {
-    if (candidate.doi && s.doi && candidate.doi.toLowerCase() === s.doi.toLowerCase()) return true;
-    if (candidate.arxiv_id && s.arxiv_id && candidate.arxiv_id.toLowerCase() === s.arxiv_id.toLowerCase()) return true;
-    if (normalizeTitle(candidate.title) === normalizeTitle(s.title)) return true;
-  }
-  return false;
+  return findDuplicateIndex(existing, candidate) >= 0;
 }
 
 interface SourceStore {
@@ -53,7 +60,18 @@ export const useSourceStore = create<SourceStore>()(
         const existing = get().sourcesByWorkspace[workspaceId] ?? [];
         if (existing.some((s) => s.paper_id === paper.id)) return;
         const title = paper.title || paper.filename;
-        if (isDuplicateIn(existing, { title })) return;
+        const duplicateIndex = findDuplicateIndex(existing, { title });
+        if (duplicateIndex >= 0) {
+          set({
+            sourcesByWorkspace: {
+              ...get().sourcesByWorkspace,
+              [workspaceId]: existing.map((source, index) =>
+                index === duplicateIndex ? { ...source, paper_id: paper.id } : source
+              ),
+            },
+          });
+          return;
+        }
         set({
           sourcesByWorkspace: {
             ...get().sourcesByWorkspace,
@@ -82,7 +100,26 @@ export const useSourceStore = create<SourceStore>()(
 
       addFromDiscovery: (workspaceId, d) => {
         const existing = get().sourcesByWorkspace[workspaceId] ?? [];
-        if (isDuplicateIn(existing, d)) return;
+        const duplicateIndex = findDuplicateIndex(existing, d);
+        if (duplicateIndex >= 0) {
+          set({
+            sourcesByWorkspace: {
+              ...get().sourcesByWorkspace,
+              [workspaceId]: existing.map((source, index) => index === duplicateIndex ? {
+                ...source,
+                title: d.title || source.title,
+                authors: d.authors.length > 0 ? d.authors : source.authors,
+                year: d.year ?? source.year,
+                doi: d.doi ?? source.doi,
+                arxiv_id: d.arxiv_id ?? source.arxiv_id,
+                abstract: d.abstract ?? source.abstract,
+                url: d.url ?? source.url,
+                citation_count: d.citation_count ?? source.citation_count,
+              } : source),
+            },
+          });
+          return;
+        }
         set({
           sourcesByWorkspace: {
             ...get().sourcesByWorkspace,
@@ -155,14 +192,37 @@ export const useSourceStore = create<SourceStore>()(
 
       syncUploads: (workspaceId, papers) => {
         const existing = get().sourcesByWorkspace[workspaceId] ?? [];
-        const uploadIds = new Set(existing.filter((s) => s.provider === "upload").map((s) => s.paper_id));
-        const newSources: WorkspaceSource[] = [];
+        const canonicalPaperIds = new Set(papers.map((paper) => paper.id));
+        const priorUploads = new Map(
+          existing
+            .filter((source) => source.provider === "upload" && source.paper_id)
+            .map((source) => [source.paper_id as string, source]),
+        );
+        const reconciled: WorkspaceSource[] = existing
+          .filter((source) => source.provider !== "upload")
+          .map((source) => source.paper_id && !canonicalPaperIds.has(source.paper_id)
+            ? { ...source, paper_id: null }
+            : source
+          );
+
         for (const p of papers) {
-          if (p.status !== "ready") continue;
-          if (uploadIds.has(p.id)) continue;
           const title = p.title || p.filename;
-          if (isDuplicateIn(existing, { title })) continue;
-          newSources.push({
+          const linkedIndex = reconciled.findIndex((source) => source.paper_id === p.id);
+          if (linkedIndex >= 0) continue;
+
+          const priorUpload = priorUploads.get(p.id);
+          if (priorUpload) {
+            reconciled.push({ ...priorUpload, title });
+            continue;
+          }
+          if (p.status !== "ready") continue;
+
+          const duplicateIndex = findDuplicateIndex(reconciled, { title });
+          if (duplicateIndex >= 0) {
+            reconciled[duplicateIndex] = { ...reconciled[duplicateIndex], paper_id: p.id };
+            continue;
+          }
+          reconciled.push({
             id: `upload-${p.id}`,
             title,
             authors: [],
@@ -179,14 +239,12 @@ export const useSourceStore = create<SourceStore>()(
             included: true,
           });
         }
-        if (newSources.length > 0) {
-          set({
-            sourcesByWorkspace: {
-              ...get().sourcesByWorkspace,
-              [workspaceId]: [...existing, ...newSources],
-            },
-          });
-        }
+        set({
+          sourcesByWorkspace: {
+            ...get().sourcesByWorkspace,
+            [workspaceId]: reconciled,
+          },
+        });
       },
 
       clearWorkspace: (workspaceId) =>

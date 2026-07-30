@@ -1,15 +1,15 @@
 import type { DeliverableType } from "@/types";
 
 export const TYPE_LABELS: Record<DeliverableType, string> = {
-  deep_research: "Deep Research",
+  deep_research: "Research brief",
   proposal: "Proposal",
-  research_plan: "Research Plan",
+  research_plan: "Research plan",
   notes: "Notes",
 };
 
 export const TYPE_DESCRIPTIONS: Record<DeliverableType, string> = {
-  deep_research: "Structured brief for exploring a research problem in depth.",
-  proposal: "Full proposal draft with problem, method, and evaluation plan.",
-  research_plan: "Planning document for organizing your research process.",
-  notes: "Freeform notes, questions, and ideas.",
+  deep_research: "Synthesize a question and its evidence.",
+  proposal: "Frame a problem, method, and evaluation.",
+  research_plan: "Organize questions, milestones, and outputs.",
+  notes: "Capture ideas and open questions.",
 };

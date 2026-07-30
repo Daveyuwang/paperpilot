@@ -1,13 +1,21 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useProposalPlanStore, type PPStatus } from "@/store/proposalPlanStore";
 import type { ActivityEvent } from "@/store/deepResearchStore";
 import { useDeliverableStore } from "@/store/deliverableStore";
 import { useSourceStore } from "@/store/sourceStore";
 import { useAgendaStore } from "@/store/agendaStore";
-import { useWorkspaceStore } from "@/store/workspaceStore";
 import { usePaperStore } from "@/store/paperStore";
+import { useWorkspaceStore } from "@/store/workspaceStore";
 import { api } from "@/api/client";
-import type { ProposalPlanRunResult, ClarificationQuestion, DeliverableType } from "@/types";
+import { getDeliverableRevision } from "@/lib/deliverableRevision";
+import type { ProposalPlanRunResult, ClarificationQuestion, DeliverableType, ProposalPlanMode } from "@/types";
+
+type ConfirmedOutline = {
+  outlineSections: string[];
+  depth: string;
+};
+
+let latestProposalRunToken = 0;
 
 export function useProposalPlanRun(workspaceId: string) {
   const store = useProposalPlanStore();
@@ -16,17 +24,30 @@ export function useProposalPlanRun(workspaceId: string) {
   const { activePaper } = usePaperStore();
   const deliverableStore = useDeliverableStore();
   const agendaStore = useAgendaStore();
-  const { setActiveViewerTab, setSelectedNav } = useWorkspaceStore();
 
   const sources = getIncludedSources(workspaceId);
   const allDeliverables = deliverableStore.getDeliverables(workspaceId);
   const drDeliverables = allDeliverables.filter((d) => d.type === "deep_research");
   const abortRef = useRef<AbortController | null>(null);
+  const tokenRef = useRef<number | null>(null);
 
-  const runStream = useCallback(async () => {
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    if (tokenRef.current === latestProposalRunToken) {
+      latestProposalRunToken += 1;
+      const state = useProposalPlanStore.getState();
+      if (!["idle", "completed", "failed", "blocked", "needs_clarification", "interrupted"].includes(state.status)) {
+        state.setStatus("interrupted");
+      }
+    }
+  }, []);
+
+  const runStream = useCallback(async (confirmedOutline?: ConfirmedOutline) => {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    const runToken = ++latestProposalRunToken;
+    tokenRef.current = runToken;
     startRun();
 
     const wsSources = sources.map((s) => ({
@@ -55,6 +76,15 @@ export function useProposalPlanRun(workspaceId: string) {
         }));
       }
     }
+    const targetDeliverable = input.targetDeliverableId
+      ? allDeliverables.find((deliverable) => deliverable.id === input.targetDeliverableId) ?? null
+      : null;
+    const baseDeliverableRevision = targetDeliverable ? getDeliverableRevision(targetDeliverable) : null;
+    const isCurrentRun = () => (
+      !controller.signal.aborted
+      && latestProposalRunToken === runToken
+      && useWorkspaceStore.getState().activeWorkspaceId === workspaceId
+    );
 
     const payload = {
       input: {
@@ -81,11 +111,17 @@ export function useProposalPlanRun(workspaceId: string) {
       existing_sections: existingSections.length > 0 ? existingSections : undefined,
       deep_research_context: drContext.length > 0 ? drContext : undefined,
       active_paper_id: activePaper?.id ?? null,
+      pre_plan: confirmedOutline?.outlineSections.length
+        ? { outline_sections: confirmedOutline.outlineSections, depth: confirmedOutline.depth }
+        : undefined,
     };
 
     try {
       await api.runProposalPlanStream(payload, (event) => {
-        if (controller.signal.aborted) return;
+        if (!isCurrentRun()) {
+          controller.abort();
+          return;
+        }
         const s = useProposalPlanStore.getState();
         const type = event.type as string;
 
@@ -179,28 +215,74 @@ export function useProposalPlanRun(workspaceId: string) {
             return;
           }
 
-          const res = (event.data ?? event) as ProposalPlanRunResult;
+          const data = (event.data ?? {}) as Partial<ProposalPlanRunResult>;
+          const res: ProposalPlanRunResult = {
+            run_id: String(event.run_id ?? data.run_id ?? ""),
+            mode: (event.mode ?? data.mode ?? input.mode) as ProposalPlanMode,
+            status,
+            clarification_questions: data.clarification_questions ?? [],
+            generated_title: data.generated_title ?? s.generatedTitle ?? null,
+            generated_outline: data.generated_outline !== undefined
+              ? data.generated_outline
+              : (s.sectionsProgress.length > 0 ? s.sectionsProgress.map((section) => section.title) : null),
+            section_updates: data.section_updates ?? [],
+            updated_section_ids: data.updated_section_ids ?? [],
+            skipped_section_ids: data.skipped_section_ids ?? [],
+            selected_source_ids: data.selected_source_ids ?? [],
+            deep_research_context_ids: data.deep_research_context_ids ?? [],
+            unresolved_questions: data.unresolved_questions ?? [],
+            follow_up_items: data.follow_up_items ?? [],
+            summary: data.summary ?? null,
+            message: data.message ?? null,
+          };
+
+          if (targetDeliverable && baseDeliverableRevision) {
+            const currentTarget = useDeliverableStore.getState()
+              .getDeliverables(workspaceId)
+              .find((deliverable) => deliverable.id === targetDeliverable.id);
+            if (!currentTarget || getDeliverableRevision(currentTarget) !== baseDeliverableRevision) {
+              s.setBlocked("The target draft changed while this run was working. Review your edits, then run again.");
+              return;
+            }
+          }
 
           let deliverable = input.targetDeliverableId
             ? allDeliverables.find((d) => d.id === input.targetDeliverableId)
             : null;
 
-          if (!deliverable) {
-            const title = res.generated_title || (input.mode === "proposal" ? "Proposal" : "Research Plan");
+          const createsNewDeliverable = !deliverable;
+          if (createsNewDeliverable) {
+            const title = res.generated_title || (input.mode === "proposal" ? "Proposal" : "Research plan");
             const delType: DeliverableType = input.mode;
             const newDel = deliverableStore.createDeliverable(workspaceId, delType, title);
             deliverable = newDel;
             s.setCreatedDeliverableId(newDel.id);
-          } else if (res.generated_title) {
+          } else if (deliverable && res.generated_title) {
             deliverableStore.renameDeliverable(workspaceId, deliverable.id, res.generated_title);
+          }
+          if (deliverable) s.setCreatedDeliverableId(deliverable.id);
+
+          if (createsNewDeliverable && deliverable && res.generated_outline && res.generated_outline.length > 0) {
+            deliverableStore.replaceSections(workspaceId, deliverable.id, res.generated_outline);
+            deliverable = useDeliverableStore.getState()
+              .getDeliverables(workspaceId)
+              .find((candidate) => candidate.id === deliverable?.id) ?? deliverable;
           }
 
           if (deliverable && res.section_updates) {
             const sortedSections = [...deliverable.sections].sort((a, b) => a.order - b.order);
             for (const update of res.section_updates) {
               if (!update.generated_content.trim()) continue;
-              const targetSection = sortedSections.find((sec) => sec.id === update.section_id) ?? sortedSections[0];
-              if (!targetSection) continue;
+              const generatedIndex = /^new-(\d+)$/.exec(update.section_id)?.[1];
+              const targetSection = sortedSections.find((section) => section.id === update.section_id)
+                ?? (generatedIndex !== undefined ? sortedSections[Number(generatedIndex)] : undefined);
+              if (!targetSection) {
+                console.warn("[PaperPilot] proposal section mapping skipped", {
+                  deliverableId: deliverable.id,
+                  sectionId: update.section_id,
+                });
+                continue;
+              }
               deliverableStore.applyAIContent(
                 workspaceId, deliverable.id, targetSection.id,
                 update.generated_content, "draft", update.source_ids_used,
@@ -230,21 +312,20 @@ export function useProposalPlanRun(workspaceId: string) {
             const del = deliverableStore.getDeliverables(workspaceId).find((d) => d.id === finalDelId);
             const firstSection = del?.sections.sort((a, b) => a.order - b.order)[0];
             if (firstSection) deliverableStore.selectSection(finalDelId, firstSection.id);
-            setActiveViewerTab("deliverable");
-            setSelectedNav("reader");
           }
         }
       }, controller.signal);
 
+      if (!isCurrentRun()) return;
       const finalStatus = useProposalPlanStore.getState().status;
       if (!["completed", "failed", "blocked", "needs_clarification"].includes(finalStatus)) {
         setFailed("Stream ended unexpectedly. Please try again.");
       }
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") return;
-      setFailed(err instanceof Error ? err.message : "Request failed");
+      if (isCurrentRun()) setFailed(err instanceof Error ? err.message : "Request failed");
     }
-  }, [input, sources, workspaceId, activePaper, allDeliverables, drDeliverables, startRun, setFailed, deliverableStore, agendaStore, setActiveViewerTab, setSelectedNav]);
+  }, [input, sources, workspaceId, activePaper, allDeliverables, drDeliverables, startRun, setFailed, deliverableStore, agendaStore]);
 
   return runStream;
 }

@@ -49,7 +49,7 @@ export function AgendaView({ onAsk }: Props) {
     return (
       <div className="flex flex-col items-center justify-center h-32 gap-2 text-surface-400">
         <BookOpen className="w-6 h-6 opacity-40" />
-        <p className="text-xs">No agenda items yet. Load a paper to get started.</p>
+        <p className="text-xs">No follow-ups yet.</p>
       </div>
     );
   }
@@ -134,6 +134,7 @@ export function AgendaView({ onAsk }: Props) {
               <button
                 className="text-[10px] text-surface-400 hover:text-accent-600 transition-colors"
                 onClick={() => reactivate(item.id)}
+                aria-label={`Reactivate ${item.title}`}
               >
                 <RotateCcw className="w-3 h-3" />
               </button>
@@ -161,9 +162,10 @@ export function AgendaView({ onAsk }: Props) {
         <button
           className="flex items-center gap-1.5 text-xs font-semibold text-surface-500 hover:text-surface-700 transition-colors mb-2"
           onClick={() => setShowReadingPath(!showReadingPath)}
+          aria-expanded={showReadingPath}
         >
           {showReadingPath ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-          Reading Path
+          Reading guide
         </button>
         {showReadingPath && <TrailTracker onAsk={onAsk} />}
       </div>
@@ -176,7 +178,7 @@ function AgendaSection({ title, count, children }: { title: string; count: numbe
     <div>
       <div className="flex items-center gap-2 mb-1 px-1">
         <span className="text-[10px] font-semibold text-surface-400 uppercase tracking-wider">{title}</span>
-        <span className="text-[10px] text-surface-300">{count}</span>
+        <span className="text-[10px] text-surface-400">{count}</span>
       </div>
       <div className="rounded-lg border border-surface-200 divide-y divide-surface-100 overflow-hidden">
         {children}
@@ -214,7 +216,7 @@ function AgendaRow({
       >
         {item.title}
       </button>
-      <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex items-center gap-1.5 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
         <button
           className="text-[10px] text-surface-400 hover:text-emerald-600 transition-colors"
           onClick={onDone}

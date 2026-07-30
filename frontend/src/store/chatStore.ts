@@ -47,6 +47,7 @@ interface ChatState {
   setConsoleSessionId: (workspaceId: string, sessionId: string) => void;
   getConsoleSessionId: (workspaceId: string) => string | null;
   clearWorkspace: (workspaceId: string) => void;
+  deactivateSession: () => void;
   initSession: () => void;
   addUserMessage: (text: string) => string;
   startAssistantMessage: () => string;
@@ -168,6 +169,25 @@ export const useChatStore = create<ChatState>()(
             messages_by_session: bySession,
           };
         }),
+
+      deactivateSession: () =>
+        set((s) => ({
+          messages_by_session: buildPersistedSessionMap(
+            s.messages_by_session,
+            s.activeSessionId,
+            s.messages,
+          ),
+          messages: [],
+          activeSessionId: null,
+          statusText: "",
+          isGenerating: false,
+          activeQuestionId: null,
+          coveredQuestionIds: [],
+          suggestedQuestions: [],
+          currentMode: "paper_understanding",
+          currentScopeLabel: "Using this paper",
+          editingMessageId: null,
+        })),
 
       initSession: () =>
         set({
@@ -329,7 +349,7 @@ export const useChatStore = create<ChatState>()(
             // If nothing was generated yet, remove the empty bubble
             messages: hasContent
               ? s.messages.map((m) =>
-                  m.id === id ? { ...m, isStreaming: false, isPartial: false } : m
+                  m.id === id ? { ...m, isStreaming: false, isPartial: true } : m
                 )
               : s.messages.filter((m) => m.id !== id),
           };

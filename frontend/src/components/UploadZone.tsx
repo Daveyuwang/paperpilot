@@ -10,6 +10,7 @@ export function UploadZone() {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const uploadPaper = usePaperStore((s) => s.uploadPaper);
   const papers = usePaperStore((s) => s.papers);
   const hasPapers = papers.length > 0;
@@ -19,10 +20,12 @@ export function UploadZone() {
     async (file: File) => {
       setIsUploading(true);
       setPendingFile(null);
+      setError(null);
       try {
         await uploadPaper(file, workspaceId);
       } catch (e) {
-        alert(`Upload failed: ${e}`);
+        console.warn("[PaperPilot] upload failed", e);
+        setError("Upload failed. Try again.");
       } finally {
         setIsUploading(false);
       }
@@ -33,9 +36,10 @@ export function UploadZone() {
   const handleFile = useCallback(
     (file: File) => {
       if (!file.name.toLowerCase().endsWith(".pdf")) {
-        alert("Only PDF files are supported.");
+        setError("Choose a PDF file.");
         return;
       }
+      setError(null);
       if (file.size > LARGE_FILE_THRESHOLD) {
         setPendingFile(file);
         return;
@@ -70,7 +74,7 @@ export function UploadZone() {
           <div>
             <p className="font-medium text-amber-800">Large PDF ({sizeMB} MB)</p>
             <p className="text-amber-700 mt-0.5">
-              Processing may take several minutes. Concept map can be generated manually after ingestion.
+              This may take a few minutes. You can build the concept map after upload.
             </p>
           </div>
         </div>
@@ -94,13 +98,41 @@ export function UploadZone() {
 
   if (hasPapers) {
     return (
+      <div>
+        <label
+          className={clsx(
+            "flex cursor-pointer items-center gap-2 rounded-lg border border-dashed px-2.5 py-2 transition-colors duration-150 focus-within:border-accent-500 focus-within:ring-2 focus-within:ring-accent-200",
+            isDragging
+              ? "border-accent-500 bg-accent-50"
+              : "border-surface-300 hover:border-surface-400 hover:bg-surface-100",
+            isUploading && "pointer-events-none opacity-60"
+          )}
+          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={onDrop}
+        >
+          <input type="file" accept=".pdf" className="sr-only" onChange={onInputChange} disabled={isUploading} />
+          {isUploading ? (
+            <div className="h-4 w-4 flex-shrink-0 animate-spin rounded-full border-2 border-accent-400 border-t-transparent" aria-hidden="true" />
+          ) : (
+            <Plus className="h-4 w-4 flex-shrink-0 text-surface-400" aria-hidden="true" />
+          )}
+          <span className="text-xs text-surface-500">{isUploading ? "Uploading…" : "Add paper"}</span>
+        </label>
+        {error && <p className="mt-1.5 text-xs text-red-600" role="alert">{error}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div>
       <label
         className={clsx(
-          "flex items-center gap-2 px-2.5 py-2 rounded-lg border border-dashed cursor-pointer transition-colors duration-150",
+          "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-4 transition-colors duration-150 focus-within:border-accent-500 focus-within:ring-2 focus-within:ring-accent-200",
           isDragging
             ? "border-accent-500 bg-accent-50"
             : "border-surface-300 hover:border-surface-400 hover:bg-surface-100",
-          isUploading && "opacity-60 pointer-events-none"
+          isUploading && "pointer-events-none opacity-60"
         )}
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
         onDragLeave={() => setIsDragging(false)}
@@ -108,43 +140,21 @@ export function UploadZone() {
       >
         <input type="file" accept=".pdf" className="sr-only" onChange={onInputChange} disabled={isUploading} />
         {isUploading ? (
-          <div className="w-4 h-4 rounded-full border-2 border-accent-400 border-t-transparent animate-spin flex-shrink-0" />
+          <>
+            <div className="h-6 w-6 animate-spin rounded-full border-2 border-accent-400 border-t-transparent" aria-hidden="true" />
+            <span className="text-xs text-surface-500">Uploading…</span>
+          </>
         ) : (
-          <Plus className="w-4 h-4 text-surface-400 flex-shrink-0" />
+          <>
+            <Upload className="h-6 w-6 text-surface-400" aria-hidden="true" />
+            <div className="text-center">
+              <p className="text-xs font-medium text-surface-600">Drop a PDF here</p>
+              <p className="mt-0.5 text-xs text-surface-400">or choose a file</p>
+            </div>
+          </>
         )}
-        <span className="text-xs text-surface-500">{isUploading ? "Uploading…" : "Add paper"}</span>
       </label>
-    );
-  }
-
-  return (
-    <label
-      className={clsx(
-        "flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed cursor-pointer transition-colors duration-150",
-        isDragging
-          ? "border-accent-500 bg-accent-50"
-          : "border-surface-300 hover:border-surface-400 hover:bg-surface-100",
-        isUploading && "opacity-60 pointer-events-none"
-      )}
-      onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-      onDragLeave={() => setIsDragging(false)}
-      onDrop={onDrop}
-    >
-      <input type="file" accept=".pdf" className="sr-only" onChange={onInputChange} disabled={isUploading} />
-      {isUploading ? (
-        <>
-          <div className="w-6 h-6 rounded-full border-2 border-accent-400 border-t-transparent animate-spin" />
-          <span className="text-xs text-surface-500">Uploading…</span>
-        </>
-      ) : (
-        <>
-          <Upload className="w-6 h-6 text-surface-400" />
-          <div className="text-center">
-            <p className="text-xs font-medium text-surface-600">Drop a PDF here</p>
-            <p className="text-[10px] text-surface-400 mt-0.5">or click to browse</p>
-          </div>
-        </>
-      )}
-    </label>
+      {error && <p className="mt-1.5 text-xs text-red-600" role="alert">{error}</p>}
+    </div>
   );
 }

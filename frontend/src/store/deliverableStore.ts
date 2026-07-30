@@ -277,11 +277,17 @@ export const useDeliverableStore = create<DeliverableStore>()(
 
       replaceSections: (wid, did, titles) => {
         const newSections = createCustomSections(titles);
-        set((s) => updateDeliverable(s, wid, did, (d) => ({
-          ...d,
-          sections: newSections,
-          updatedAt: Date.now(),
-        })));
+        set((s) => ({
+          ...updateDeliverable(s, wid, did, (d) => ({
+            ...d,
+            sections: newSections,
+            updatedAt: Date.now(),
+          })),
+          selectedSectionIdByDeliverable: {
+            ...s.selectedSectionIdByDeliverable,
+            [did]: newSections[0]?.id ?? null,
+          },
+        }));
       },
 
       clearWorkspace: (workspaceId) =>

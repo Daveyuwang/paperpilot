@@ -32,6 +32,15 @@ function reached(cur: DeepResearchStatus, target: DeepResearchStatus) {
   return STATUS_ORDER.indexOf(cur) >= STATUS_ORDER.indexOf(target);
 }
 
+function questionsOverlap(left: string, right: string) {
+  const a = left.trim().toLowerCase();
+  const b = right.trim().toLowerCase();
+  if (!a || !b) return false;
+  return a.includes(b.slice(0, 30)) || b.includes(a.slice(0, 30));
+}
+
+let latestDeepPlanRequestToken = 0;
+
 /* ── Root ──────────────────────────────────────────────────────────────────── */
 
 export function DeepResearchView() {
@@ -48,7 +57,8 @@ export function DeepResearchView() {
   return (
     <TaskPageShell
       icon={<FlaskConical className="w-4 h-4 text-accent-600" />}
-      title="Deep Research"
+      title="Research"
+      description="Build a source-backed synthesis in clear, inspectable stages."
     >
       <div className="space-y-4">
         {/* ① Input — always visible once topic exists */}
@@ -164,7 +174,7 @@ function TopicInput({ workspaceId, locked }: { workspaceId: string; locked: bool
             className="btn-primary flex items-center gap-1.5 px-4 py-2 text-xs"
           >
             <FlaskConical className="w-3.5 h-3.5" />
-            Start
+            Build research plan
           </button>
           <button
             onClick={runStream}
@@ -172,7 +182,7 @@ function TopicInput({ workspaceId, locked }: { workspaceId: string; locked: bool
             className="btn-ghost flex items-center gap-1.5 px-3 py-2 text-xs text-surface-500"
           >
             <Play className="w-3.5 h-3.5" />
-            Run Directly
+            Run without plan
           </button>
         </div>
       )}
@@ -188,13 +198,25 @@ function PlanSection({ workspaceId }: { workspaceId: string }) {
   const { getIncludedSources } = useSourceStore();
   const { activePaper } = usePaperStore();
   const runStream = useDeepResearchRun(workspaceId);
+  const handleEditTopic = useCallback(() => {
+    const topic = store.input.topic;
+    store.reset();
+    store.setInput({ topic });
+  }, [store]);
   const generating = useRef(false);
+  const requestTokenRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (requestTokenRef.current === latestDeepPlanRequestToken) latestDeepPlanRequestToken += 1;
+  }, []);
 
   const pastPlan = reached(status, "validating");
 
   const handleGeneratePlan = useCallback(async () => {
     if (generating.current) return;
     generating.current = true;
+    const requestToken = ++latestDeepPlanRequestToken;
+    requestTokenRef.current = requestToken;
     store.startPlanGeneration();
     try {
       const sources = getIncludedSources(workspaceId);
@@ -209,6 +231,7 @@ function PlanSection({ workspaceId }: { workspaceId: string }) {
         workspace_sources: wsPayload,
         active_paper_id: activePaper?.id ?? null,
       });
+      if (requestToken !== latestDeepPlanRequestToken || useWorkspaceStore.getState().activeWorkspaceId !== workspaceId) return;
       store.setGeneratedPlan({
         subQuestions: res.sub_questions.map((sq) => ({
           id: sq.id, question: sq.question, rationale: sq.rationale,
@@ -222,9 +245,10 @@ function PlanSection({ workspaceId }: { workspaceId: string }) {
       store.completePlanGeneration();
       store.setStatus("plan_ready");
     } catch (err: unknown) {
+      if (requestToken !== latestDeepPlanRequestToken || useWorkspaceStore.getState().activeWorkspaceId !== workspaceId) return;
       store.setFailed(err instanceof Error ? err.message : "Plan generation failed");
     } finally {
-      generating.current = false;
+      if (requestToken === latestDeepPlanRequestToken) generating.current = false;
     }
   }, [input.topic, workspaceId, activePaper, getIncludedSources, store]);
 
@@ -240,8 +264,8 @@ function PlanSection({ workspaceId }: { workspaceId: string }) {
       <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-surface-50 border border-surface-200">
         <Loader2 className="w-4 h-4 text-accent-600 animate-spin shrink-0" />
         <div>
-          <p className="text-sm font-medium text-surface-700">Generating research plan...</p>
-          <p className="text-xs text-surface-500 mt-0.5">Analyzing topic and identifying sub-questions</p>
+          <p className="text-sm font-medium text-surface-700">Building research plan…</p>
+          <p className="text-xs text-surface-500 mt-0.5">Defining questions and search strategy</p>
         </div>
       </div>
     );
@@ -311,14 +335,14 @@ function PlanSection({ workspaceId }: { workspaceId: string }) {
           className="btn-primary flex items-center gap-1.5 px-4 py-2 text-xs"
         >
           <Check className="w-3.5 h-3.5" />
-          Looks Good — Run
+          Run research
         </button>
         <button
-          onClick={store.reset}
+          onClick={handleEditTopic}
           className="btn-ghost flex items-center gap-1.5 px-3 py-2 text-xs"
         >
           <RotateCcw className="w-3.5 h-3.5" />
-          Start Over
+          Edit topic
         </button>
       </div>
     </div>
@@ -355,24 +379,30 @@ function LiveProgress() {
 /* ── ⑤ Interrupted banner ──────────────────────────────────────────────────── */
 
 function InterruptedBanner() {
-  const { currentStageMessage, sectionsProgress, generatedTitle, reset } = useDeepResearchStore();
+  const store = useDeepResearchStore();
+  const { currentStageMessage, sectionsProgress, generatedTitle } = store;
   const completedSections = sectionsProgress.filter((s) => s.status === "done").length;
+  const handleBackToSetup = () => {
+    const topic = store.input.topic;
+    store.reset();
+    store.setInput({ topic });
+  };
 
   return (
     <div className="space-y-3">
       <div className="flex items-start gap-3 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200">
         <RotateCcw className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-amber-800">Research was interrupted</p>
+          <p className="text-sm font-medium text-amber-800">Research stopped</p>
           <p className="text-xs text-amber-600 mt-1">
-            The page was refreshed while research was running. The stream cannot be resumed.
+            This run stopped when the page refreshed.
           </p>
         </div>
       </div>
 
       {(generatedTitle || currentStageMessage || completedSections > 0) && (
         <div className="px-4 py-3 rounded-lg bg-surface-50 border border-surface-200 space-y-1 text-xs">
-          <p className="font-medium text-surface-600">Last known progress:</p>
+          <p className="font-medium text-surface-600">Progress before interruption</p>
           {generatedTitle && <p className="text-surface-700">Title: {generatedTitle}</p>}
           {currentStageMessage && <p className="text-surface-500">Stage: {currentStageMessage}</p>}
           {completedSections > 0 && (
@@ -383,9 +413,9 @@ function InterruptedBanner() {
         </div>
       )}
 
-      <button onClick={reset} className="btn-primary flex items-center gap-1.5 px-4 py-2 text-xs">
+      <button onClick={handleBackToSetup} className="btn-primary flex items-center gap-1.5 px-4 py-2 text-xs">
         <RotateCcw className="w-3 h-3" />
-        Start Over
+        Back to setup
       </button>
     </div>
   );
@@ -395,11 +425,27 @@ function InterruptedBanner() {
 
 function ResultSummary({ result, workspaceId }: { result: DeepResearchRunResult; workspaceId: string }) {
   const { createdDeliverableId, reset } = useDeepResearchStore();
-  const { setSelectedNav, setConsolePanelTab } = useWorkspaceStore();
+  const { setSelectedNav, setActiveViewerTab } = useWorkspaceStore();
   const { setActiveDeliverable, getDeliverables, selectSection } = useDeliverableStore();
 
   const draftedCount = (result.section_updates ?? []).filter((u) => u.generated_content.trim()).length;
   const skippedCount = (result.section_updates ?? []).filter((u) => !u.generated_content.trim()).length;
+  const unresolvedQuestions = result.unresolved_questions ?? [];
+  const followUpItems = result.follow_up_items ?? [];
+  const openQuestions = [
+    ...unresolvedQuestions.map((title) => ({
+      title,
+      description: null as string | null,
+      inAgenda: followUpItems.some((item) => questionsOverlap(title, item.title)),
+    })),
+    ...followUpItems
+      .filter((item) => !unresolvedQuestions.some((title) => questionsOverlap(title, item.title)))
+      .map((item) => ({
+        title: item.title,
+        description: item.description || null,
+        inAgenda: true,
+      })),
+  ];
 
   const handleOpenDeliverable = () => {
     if (createdDeliverableId) {
@@ -408,15 +454,15 @@ function ResultSummary({ result, workspaceId }: { result: DeepResearchRunResult;
       const firstSection = del?.sections.sort((a, b) => a.order - b.order)[0];
       if (firstSection) selectSection(createdDeliverableId, firstSection.id);
     }
-    setSelectedNav("console");
-    setConsolePanelTab("deliverable");
+    setActiveViewerTab("deliverable");
+    setSelectedNav("reader");
   };
 
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 text-emerald-700">
         <Check className="w-4 h-4" />
-        <span className="text-sm font-medium">Deep research complete</span>
+        <span className="text-sm font-medium">Research complete</span>
       </div>
 
       {result.summary && (
@@ -427,14 +473,14 @@ function ResultSummary({ result, workspaceId }: { result: DeepResearchRunResult;
 
       <StatGrid stats={[
         { label: "Sections drafted", value: draftedCount },
-        { label: "Sections skipped", value: skippedCount },
+        { label: "Not drafted", value: skippedCount },
         { label: "Sources used", value: (result.selected_source_ids ?? []).length },
-        { label: "Sources discovered", value: (result.discovered_sources ?? []).length },
+        { label: "New sources", value: (result.discovered_sources ?? []).length },
       ]} />
 
       {(result.discovered_sources ?? []).length > 0 && (
         <div>
-          <h4 className="text-xs font-medium text-surface-600 mb-1.5">Discovered sources saved</h4>
+          <h4 className="text-xs font-medium text-surface-600 mb-1.5">Sources added</h4>
           <div className="space-y-1">
             {(result.discovered_sources ?? []).map((s, i) => (
               <div key={i} className="text-xs text-surface-600 bg-white border border-surface-200 rounded px-2.5 py-1.5 flex items-center gap-2">
@@ -447,51 +493,23 @@ function ResultSummary({ result, workspaceId }: { result: DeepResearchRunResult;
         </div>
       )}
 
-      {(result.unresolved_questions ?? []).length > 0 && (
+      {openQuestions.length > 0 && (
         <div>
-          <h4 className="text-xs font-medium text-surface-600 mb-1">Open questions identified</h4>
-          <p className="text-[11px] text-surface-400 mb-1.5">
-            The following gaps or uncertainties were found during research.
-            {(result.follow_up_items ?? []).length > 0 && (
-              <> The most actionable ones were promoted to your Agenda.</>
-            )}
-          </p>
+          <h4 className="text-xs font-medium text-surface-600 mb-1.5">Open questions</h4>
           <div className="space-y-1">
-            {(result.unresolved_questions ?? []).map((q, i) => {
-              const promoted = (result.follow_up_items ?? []).some(
-                (f) => f.title.toLowerCase().includes(q.slice(0, 30).toLowerCase()) ||
-                       q.toLowerCase().includes(f.title.slice(0, 30).toLowerCase())
-              );
-              return (
-                <div key={i} className="text-xs text-surface-600 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5 flex items-start gap-2">
-                  <HelpCircle className="w-3 h-3 text-amber-500 shrink-0 mt-0.5" />
-                  <span className="flex-1">{q}</span>
-                  {promoted && (
-                    <span className="text-[9px] text-accent-600 bg-accent-50 border border-accent-200 px-1.5 py-0.5 rounded shrink-0">
-                      → Agenda
-                    </span>
+            {openQuestions.slice(0, 8).map((item, i) => (
+              <div key={`${item.title}-${i}`} className="text-xs text-surface-600 bg-white border border-surface-200 rounded px-2.5 py-2 flex items-start gap-2">
+                <HelpCircle className="w-3 h-3 text-amber-500 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <span>{item.title}</span>
+                  {item.description && (
+                    <p className="text-[11px] text-surface-500 mt-0.5 line-clamp-1">{item.description}</p>
                   )}
                 </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {(result.follow_up_items ?? []).length > 0 && (
-        <div>
-          <h4 className="text-xs font-medium text-surface-600 mb-1">
-            Follow-up agenda items added
-            <span className="text-[10px] text-surface-400 font-normal ml-1">
-              ({Math.min((result.follow_up_items ?? []).length, 5)} of {(result.unresolved_questions ?? []).length} questions)
-            </span>
-          </h4>
-          <div className="space-y-1">
-            {(result.follow_up_items ?? []).slice(0, 5).map((item, i) => (
-              <div key={i} className="text-xs text-surface-600 bg-accent-50 border border-accent-200 rounded px-2.5 py-1.5">
-                <span className="font-medium">{item.title}</span>
-                {item.description && (
-                  <p className="text-[11px] text-surface-400 mt-0.5 line-clamp-1">{item.description}</p>
+                {item.inAgenda && (
+                  <span className="text-[10px] text-accent-700 bg-accent-50 border border-accent-200 px-1.5 py-0.5 rounded shrink-0">
+                    In agenda
+                  </span>
                 )}
               </div>
             ))}
@@ -500,19 +518,21 @@ function ResultSummary({ result, workspaceId }: { result: DeepResearchRunResult;
       )}
 
       <div className="flex items-center gap-2 pt-2">
-        <button
-          onClick={handleOpenDeliverable}
-          className="btn-primary flex items-center gap-1.5 px-4 py-2 text-xs"
-        >
-          <ExternalLink className="w-3 h-3" />
-          Open Deliverable
-        </button>
+        {createdDeliverableId && (
+          <button
+            onClick={handleOpenDeliverable}
+            className="btn-primary flex items-center gap-1.5 px-4 py-2 text-xs"
+          >
+            <ExternalLink className="w-3 h-3" />
+            Open draft
+          </button>
+        )}
         <button
           onClick={reset}
           className="btn-ghost flex items-center gap-1.5 px-3 py-2 text-xs"
         >
           <RotateCcw className="w-3 h-3" />
-          New Research
+          Start another run
         </button>
       </div>
     </div>

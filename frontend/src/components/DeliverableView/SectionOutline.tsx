@@ -12,7 +12,7 @@ export function SectionOutline({ deliverable, workspaceId, previews }: { deliver
   const sorted = [...deliverable.sections].sort((a, b) => a.order - b.order);
 
   return (
-    <div className="flex-shrink-0 w-52 border-r border-surface-200 bg-surface-50 flex flex-col overflow-hidden">
+    <div className="flex max-h-44 w-full flex-shrink-0 flex-col overflow-hidden border-b border-surface-200 bg-surface-50 md:max-h-none md:w-52 md:border-b-0 md:border-r">
       <div className="flex items-center justify-between px-3 py-2 border-b border-surface-100">
         <span className="text-[11px] font-medium text-surface-500 uppercase tracking-wide">Outline</span>
         <button
@@ -60,7 +60,7 @@ export function SectionOutline({ deliverable, workspaceId, previews }: { deliver
               </div>
             </button>
             {selectedId === sec.id && (
-              <div className="flex items-center gap-0.5 px-3 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="flex items-center gap-0.5 px-3 py-0.5 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
                 <button
                   onClick={() => moveSection(workspaceId, deliverable.id, sec.id, "up")}
                   disabled={idx === 0}

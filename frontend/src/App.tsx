@@ -6,11 +6,11 @@ import { useSourceStore } from "@/store/sourceStore";
 import { useChatStore } from "@/store/chatStore";
 import { useDeepResearchStore } from "@/store/deepResearchStore";
 import { useProposalPlanStore } from "@/store/proposalPlanStore";
+import { useRunStore } from "@/store/runStore";
 import type { Citation } from "@/types";
 import { api } from "@/api/client";
 
 import { SidebarNav } from "@/components/SidebarNav";
-import { WorkspaceHeader } from "@/components/WorkspaceHeader";
 import { WorkspaceHome } from "@/components/WorkspaceHome";
 import { WorkspaceOverview } from "@/components/WorkspaceOverview";
 import { ConsolePage } from "@/components/ConsolePage";
@@ -33,7 +33,7 @@ function syncBeforeUnload() {
 }
 
 export default function App() {
-  const { papers, activePaper, questions, loadPapers, restoreActive, selectPaper } =
+  const { papers, activePaper, questions, currentWorkspaceId, loadedWorkspaceId, resetForWorkspace, selectPaper } =
     usePaperStore();
   const { setActivePaperId, setActiveViewerTab, selectedNav, setSelectedNav, appView, getActiveWorkspace } = useWorkspaceStore();
   const { bootstrapFromTrail, switchPaperAgenda } = useAgendaStore();
@@ -53,20 +53,26 @@ export default function App() {
   // Load papers for active workspace
   useEffect(() => {
     if (activeWs?.id) {
-      loadPapers(activeWs.id);
-      restoreActive(activeWs.id).catch(() => {});
+      resetForWorkspace(activeWs.id).catch((error) => {
+        console.warn("[PaperPilot] workspace reset failed", error);
+      });
     }
-  }, [activeWs?.id, loadPapers, restoreActive]);
+  }, [activeWs?.id, resetForWorkspace]);
 
   // Reset global stores when workspace changes to prevent stale data leaking
   const prevWsId = useRef<string | null>(null);
   useEffect(() => {
     if (!activeWs?.id) return;
     if (prevWsId.current && prevWsId.current !== activeWs.id) {
+      useChatStore.getState().deactivateSession();
       useDeepResearchStore.getState().reset();
       useProposalPlanStore.getState().reset();
-      useChatStore.getState().initSession();
+      useRunStore.getState().reset();
       useAgendaStore.getState().clearVolatile();
+      setHighlights([]);
+      setTargetPage(undefined);
+      setJumpCounter(0);
+      setQueuedQuestion(null);
     }
     prevWsId.current = activeWs.id;
   }, [activeWs?.id]);
@@ -102,7 +108,8 @@ export default function App() {
             clearInterval(healthRetryRef.current);
             healthRetryRef.current = null;
           }
-          if (activeWs?.id) loadPapers(activeWs.id);
+          const currentWorkspaceId = useWorkspaceStore.getState().activeWorkspaceId;
+          if (currentWorkspaceId) resetForWorkspace(currentWorkspaceId).catch(() => {});
           try {
             const s = await api.getLLMSettings();
             if (!s.has_key) setSettingsOpen(true);
@@ -132,9 +139,10 @@ export default function App() {
         clearInterval(healthRetryRef.current);
         healthRetryRef.current = null;
       }
-      if (activeWs?.id) loadPapers(activeWs.id);
+      const currentWorkspaceId = useWorkspaceStore.getState().activeWorkspaceId;
+      if (currentWorkspaceId) resetForWorkspace(currentWorkspaceId).catch(() => {});
     }
-  }, [loadPapers, activeWs?.id]);
+  }, [resetForWorkspace]);
 
   // Keep workspace store in sync with active paper
   useEffect(() => {
@@ -153,8 +161,10 @@ export default function App() {
 
   // Sync uploaded papers into workspace sources
   useEffect(() => {
-    if (papers.length > 0 && activeWs?.id) syncUploads(activeWs.id, papers);
-  }, [papers, activeWs?.id, syncUploads]);
+    if (activeWs?.id && currentWorkspaceId === activeWs.id && loadedWorkspaceId === activeWs.id) {
+      syncUploads(activeWs.id, papers);
+    }
+  }, [papers, activeWs?.id, currentWorkspaceId, loadedWorkspaceId, syncUploads]);
 
   // Bootstrap workspace console session (always, regardless of paper selection)
   const { setConsoleSessionId, getConsoleSessionId } = useChatStore();
@@ -187,9 +197,10 @@ export default function App() {
   const handleSelectPaper = useCallback(async (id: string) => {
     setHighlights([]);
     setTargetPage(undefined);
+    const result = await selectPaper(id);
+    if (result === null) return;
     setActiveViewerTab("reader");
     switchPaperAgenda(id);
-    await selectPaper(id);
     setSelectedNav("reader");
   }, [selectPaper, setActiveViewerTab, switchPaperAgenda, setSelectedNav]);
 
@@ -225,12 +236,12 @@ export default function App() {
 
   const handleTrailAsk = useCallback((q: { id: string; question: string }) => {
     setQueuedQuestion({ id: q.id, question: q.question, nonce: Date.now() });
-    // If on reader, the queued question goes to reader's QA panel (paper-scoped)
+    // Without a selected paper, the workspace chat owns guide follow-ups.
     const currentNav = useWorkspaceStore.getState().selectedNav;
-    if (currentNav !== "reader") {
+    if (currentNav !== "reader" || !activePaper) {
       setSelectedNav("console");
     }
-  }, [setSelectedNav]);
+  }, [activePaper, setSelectedNav]);
 
   const bboxes = highlights.map((c) => c.bbox).filter(Boolean) as NonNullable<Citation["bbox"]>[];
 
@@ -239,12 +250,12 @@ export default function App() {
       {appView === "home" ? (
         <WorkspaceHome />
       ) : (
-      <div className="flex flex-col h-screen overflow-hidden bg-surface-50">
+      <div className="flex h-dvh flex-col overflow-hidden bg-surface-50">
         {/* Backend connectivity banner */}
         {backendDown && (
-          <div className="flex-shrink-0 flex items-center gap-3 px-4 py-2 bg-red-50 border-b border-red-200 text-red-700 text-xs">
+          <div className="flex flex-shrink-0 items-center gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700" role="alert">
             <WifiOff className="w-3.5 h-3.5 flex-shrink-0" />
-            <span>Cannot reach the PaperPilot server. Check that Docker containers are running.</span>
+            <span>PaperPilot is offline. Start the local server, then retry.</span>
             <button
               onClick={handleRetryHealth}
               disabled={retrying}
@@ -256,21 +267,21 @@ export default function App() {
           </div>
         )}
 
-        <div className="flex flex-1 min-h-0 overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
           {/* Global left nav */}
           <SidebarNav onSettingsClick={() => setSettingsOpen(true)} />
 
           {/* Main area */}
           <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-            {/* Workspace header */}
-            <WorkspaceHeader />
-
             {/* Body: source rail (reader only) + page content */}
-            <div className="flex flex-1 min-h-0 overflow-hidden">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden 2xl:flex-row">
               {/* Source Rail: upload + paper list — only visible in reader view */}
               {selectedNav === "reader" && (
-                <aside className="flex-shrink-0 w-48 flex flex-col border-r border-surface-200 bg-surface-50 overflow-hidden">
-                  <div className="px-3 py-3 border-b border-surface-200">
+                <aside
+                  className="flex max-h-32 w-full flex-shrink-0 flex-row overflow-hidden border-b border-surface-200 bg-surface-50 2xl:max-h-none 2xl:w-56 2xl:flex-col 2xl:border-b-0 2xl:border-r"
+                  aria-label="Paper library"
+                >
+                  <div className="w-36 flex-shrink-0 border-r border-surface-200 px-3 py-3 2xl:w-auto 2xl:border-b 2xl:border-r-0">
                     <UploadZone />
                   </div>
                   <div className="flex-1 overflow-y-auto px-2 py-2">
@@ -280,7 +291,7 @@ export default function App() {
               )}
 
               {/* Page content — single page per nav item */}
-              <main className="flex-1 min-w-0 overflow-hidden">
+              <main id="main-content" className="min-w-0 flex-1 overflow-hidden">
                 {selectedNav === "workspace" && <WorkspaceOverview />}
                 {selectedNav === "console" && (
                   <ConsolePage
@@ -289,7 +300,6 @@ export default function App() {
                     onQueuedQuestionHandled={(nonce) =>
                       setQueuedQuestion((cur) => (cur?.nonce === nonce ? null : cur))
                     }
-                    onTrailAsk={handleTrailAsk}
                   />
                 )}
                 {selectedNav === "reader" && (

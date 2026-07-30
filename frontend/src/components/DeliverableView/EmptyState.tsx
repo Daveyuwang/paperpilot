@@ -1,5 +1,5 @@
 import { useDeliverableStore } from "@/store/deliverableStore";
-import { FileText } from "lucide-react";
+import { ArrowRight, FileText } from "lucide-react";
 import { TYPE_LABELS, TYPE_DESCRIPTIONS } from "./constants";
 import type { DeliverableType } from "@/types";
 
@@ -8,28 +8,29 @@ export function EmptyState({ workspaceId }: { workspaceId: string }) {
   const types: DeliverableType[] = ["deep_research", "proposal", "research_plan", "notes"];
 
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-6 px-8">
-      <div className="text-center">
-        <h3 className="heading-serif text-base text-surface-700">Create a Deliverable</h3>
-        <p className="text-xs text-surface-400 mt-1 max-w-xs">
-          Start a structured document for your research. Choose a template to begin.
-        </p>
-      </div>
-      <div className="grid grid-cols-2 gap-3 max-w-md w-full">
-        {types.map((type) => (
-          <button
-            key={type}
-            onClick={() => createDeliverable(workspaceId, type)}
-            className="text-left px-4 py-3 rounded-xl border border-surface-200 bg-white hover:border-accent-300 hover:shadow-sm transition-all group"
-          >
-            <div className="flex items-center gap-2 mb-1">
-              <FileText className="w-3.5 h-3.5 text-surface-400 group-hover:text-accent-500 transition-colors" />
-              <span className="text-xs font-semibold text-surface-700">{TYPE_LABELS[type]}</span>
-            </div>
-            <p className="text-[11px] text-surface-400 leading-snug">{TYPE_DESCRIPTIONS[type]}</p>
-          </button>
-        ))}
-      </div>
+    <div className="flex h-full items-center justify-center px-5 py-10 sm:px-8">
+      <section className="w-full max-w-md" aria-labelledby="create-draft-title">
+        <h2 id="create-draft-title" className="text-base font-semibold text-surface-800">Create a draft</h2>
+        <p className="mt-1 text-sm text-surface-500">Choose a starting structure.</p>
+        <div className="mt-5 divide-y divide-surface-200 border-y border-surface-200">
+          {types.map((type) => (
+            <button
+              key={type}
+              onClick={() => createDeliverable(workspaceId, type)}
+              className="group flex w-full items-center gap-3 py-3 text-left"
+            >
+              <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-surface-100 text-surface-500">
+                <FileText className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold text-surface-700">{TYPE_LABELS[type]}</span>
+                <span className="mt-0.5 block text-xs text-surface-400">{TYPE_DESCRIPTIONS[type]}</span>
+              </span>
+              <ArrowRight className="h-4 w-4 flex-shrink-0 text-surface-300 transition-transform group-hover:translate-x-0.5 group-hover:text-surface-500" aria-hidden="true" />
+            </button>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

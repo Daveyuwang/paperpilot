@@ -42,7 +42,6 @@ const MIN_OVERVIEW_ZOOM = 0.7;
 const MIN_FOCUS_ZOOM = 0.95;
 const MIN_FULL_ZOOM = 0.5;
 const MAX_FOCUS_ZOOM = 1.48;
-const DETAIL_PANEL_WIDTH = 320;
 
 function makeDisplayLabel(label: string): string {
   if (label.length <= 24) return label;
@@ -814,7 +813,7 @@ export function ConceptMap({
   if (error) {
     return (
       <div className="flex h-full items-center justify-center">
-        <p className="text-sm text-red-400">{error}</p>
+        <p className="text-sm text-red-600">{error}</p>
       </div>
     );
   }
@@ -865,7 +864,7 @@ export function ConceptMap({
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex shrink-0 items-center gap-3 border-b border-surface-200 px-4 py-2">
+      <div className="flex shrink-0 flex-col gap-2 border-b border-surface-200 px-4 py-2 sm:flex-row sm:items-center">
         <div className="flex min-w-0 flex-[1.1] items-center gap-2">
           <span className="rounded-full border border-accent-200 bg-accent-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-accent-700">
             Concepts
@@ -873,7 +872,7 @@ export function ConceptMap({
           <h2 className="truncate text-xs font-semibold text-surface-700 sm:text-sm">{paperTitle}</h2>
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex w-full items-center gap-2 overflow-x-auto pb-1 sm:ml-auto sm:w-auto sm:pb-0">
           <button
             onClick={() => {
               const cy = cyRef.current;
@@ -954,8 +953,8 @@ export function ConceptMap({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <div className="relative min-w-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto min-[1800px]:flex-row min-[1800px]:overflow-hidden">
+        <div className="relative min-h-[50vh] w-full flex-none min-[1800px]:min-h-0 min-[1800px]:min-w-0 min-[1800px]:flex-1">
           <div ref={containerRef} className="h-full w-full" />
 
           <div className="pointer-events-none absolute bottom-3 left-3 rounded-full border border-surface-200 bg-white/90 px-3 py-1 text-[10px] text-surface-500 backdrop-blur">
@@ -966,14 +965,13 @@ export function ConceptMap({
 
           {viewMode === "full" && (
             <div className="pointer-events-none absolute bottom-3 right-3 rounded-full border border-surface-200 bg-white/90 px-3 py-1 text-[10px] text-surface-400 backdrop-blur">
-              Click any node to jump back into a readable local focus
+              Select a node to focus
             </div>
           )}
         </div>
 
         <aside
-          className="flex h-full flex-none flex-col border-l border-surface-200 bg-white"
-          style={{ width: DETAIL_PANEL_WIDTH }}
+          className="flex max-h-[45vh] w-full flex-none flex-col border-t border-surface-200 bg-white min-[1800px]:h-full min-[1800px]:max-h-none min-[1800px]:w-80 min-[1800px]:border-l min-[1800px]:border-t-0"
         >
           {selectedNode ? (
             <DetailCard
@@ -986,7 +984,7 @@ export function ConceptMap({
             />
           ) : (
             <div className="flex h-full items-center justify-center px-6 text-center text-sm text-surface-400">
-              Select a concept to inspect its role in the paper.
+              Select a concept for details.
             </div>
           )}
         </aside>

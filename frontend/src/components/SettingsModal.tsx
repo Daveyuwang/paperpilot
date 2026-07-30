@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useCallback } from "react";
 import { X, Eye, EyeOff, Trash2, ChevronDown, RefreshCw, Loader2 } from "lucide-react";
 import clsx from "clsx";
 
@@ -34,6 +34,8 @@ export function SettingsModal({ open, onClose }: Props) {
   const [error, setError] = useState<string>("");
   const [success, setSuccess] = useState<string>("");
   const [fetchFailed, setFetchFailed] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   const defaultBaseUrlForProtocol = useMemo(() => {
     if (protocol === "openai") return "https://api.openai.com/v1";
@@ -102,25 +104,76 @@ export function SettingsModal({ open, onClose }: Props) {
     loadSettings();
   }, [open, loadSettings]);
 
+  useEffect(() => {
+    if (!open) return;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusFrame = window.requestAnimationFrame(() => {
+      const firstControl = dialogRef.current?.querySelector<HTMLElement>(
+        "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+      );
+      (firstControl ?? dialogRef.current)?.focus();
+    });
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const controls = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+      )).filter((control) => control.getClientRects().length > 0);
+      if (controls.length === 0) {
+        event.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", handleKeyDown);
+      previousFocusRef.current?.focus();
+    };
+  }, [open, onClose]);
+
+  const titleId = useId();
+
   if (!open) return null;
 
   const saveDisabled = saving || loading || !protocol || (!remoteHasKey && apiKey.trim().length === 0);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <div className="relative w-[520px] max-w-[calc(100vw-24px)] rounded-2xl border border-surface-200 bg-white shadow-lg">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6">
+      <button className="absolute inset-0 bg-surface-900/35" onClick={onClose} aria-label="Close settings" />
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="relative flex max-h-[calc(100dvh-24px)] w-[520px] max-w-full flex-col overflow-hidden rounded-xl border border-surface-200 bg-white shadow-md"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+      >
         <div className="flex items-center justify-between px-4 py-3 border-b border-surface-200">
           <div>
-            <div className="text-sm font-semibold text-surface-800">Settings</div>
-            <div className="text-xs text-surface-500">LLM provider configuration (stored server-side per guest)</div>
+            <h2 id={titleId} className="text-sm font-semibold text-surface-800">Model settings</h2>
+            <p className="text-xs text-surface-500">Provider, model, language, and API key.</p>
           </div>
-          <button className="btn-ghost p-1" onClick={onClose} title="Close">
+          <button className="btn-ghost p-2" onClick={onClose} aria-label="Close settings">
             <X className="w-4 h-4 text-surface-400" />
           </button>
         </div>
 
-        <div className="px-4 py-4 space-y-4">
+        <div className="space-y-4 overflow-y-auto px-4 py-4">
           {error && (
             <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600 flex items-center justify-between gap-2">
               <span>{error}</span>
@@ -153,10 +206,11 @@ export function SettingsModal({ open, onClose }: Props) {
           ) : (
           <>
           <div className="space-y-2">
-            <label className="text-xs font-semibold text-surface-500">Protocol</label>
+            <label htmlFor="settings-provider" className="text-xs font-semibold text-surface-500">Provider</label>
             <div className="relative">
               <select
-                className="w-full appearance-none rounded-xl border border-surface-200 bg-surface-50 px-3 py-2 pr-9 text-sm text-surface-800 outline-none focus:ring-1 focus:ring-accent-400"
+                id="settings-provider"
+                className="select-base w-full appearance-none pr-9"
                 value={protocol}
                 onChange={(e) => setProtocol(e.target.value as LLMProtocol)}
                 disabled={loading || saving}
@@ -172,9 +226,10 @@ export function SettingsModal({ open, onClose }: Props) {
           </div>
 
           <div className="space-y-2">
-            <label className="text-xs font-semibold text-surface-500">Base URL</label>
+            <label htmlFor="settings-base-url" className="text-xs font-semibold text-surface-500">Base URL</label>
             <input
-              className="w-full rounded-xl border border-surface-200 bg-surface-50 px-3 py-2 text-sm text-surface-800 placeholder:text-surface-400 outline-none focus:ring-1 focus:ring-accent-400"
+              id="settings-base-url"
+              className="input-base w-full"
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
               placeholder={baseUrlPlaceholder}
@@ -186,9 +241,10 @@ export function SettingsModal({ open, onClose }: Props) {
           </div>
 
           <div className="space-y-2">
-            <label className="text-xs font-semibold text-surface-500">Model</label>
+            <label htmlFor="settings-model" className="text-xs font-semibold text-surface-500">Model</label>
             <input
-              className="w-full rounded-xl border border-surface-200 bg-surface-50 px-3 py-2 text-sm text-surface-800 placeholder:text-surface-400 outline-none focus:ring-1 focus:ring-accent-400"
+              id="settings-model"
+              className="input-base w-full"
               value={model}
               onChange={(e) => setModel(e.target.value)}
               placeholder={defaultModelForProtocol}
@@ -202,10 +258,11 @@ export function SettingsModal({ open, onClose }: Props) {
           </div>
 
           <div className="space-y-2">
-            <label className="text-xs font-semibold text-surface-500">Trail language</label>
+            <label htmlFor="settings-language" className="text-xs font-semibold text-surface-500">Guide language</label>
             <div className="relative">
               <select
-                className="w-full appearance-none rounded-xl border border-surface-200 bg-surface-50 px-3 py-2 pr-9 text-sm text-surface-800 outline-none focus:ring-1 focus:ring-accent-400"
+                id="settings-language"
+                className="select-base w-full appearance-none pr-9"
                 value={language}
                 onChange={(e) => setLanguage(e.target.value)}
                 disabled={loading || saving}
@@ -224,13 +281,13 @@ export function SettingsModal({ open, onClose }: Props) {
               <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-surface-400" />
             </div>
             <div className="text-[11px] text-surface-400">
-              This affects newly generated guided trail questions.
+              Applies to new reading-guide questions.
             </div>
           </div>
 
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <label className="text-xs font-semibold text-surface-500">API key</label>
+              <label htmlFor="settings-api-key" className="text-xs font-semibold text-surface-500">API key</label>
               <span className={clsx(
                 "text-[11px] font-semibold px-2 py-0.5 rounded-full border",
                 remoteHasKey
@@ -242,23 +299,22 @@ export function SettingsModal({ open, onClose }: Props) {
             </div>
             <div className="flex items-center gap-2">
               <input
-                className="flex-1 rounded-xl border border-surface-200 bg-surface-50 px-3 py-2 text-sm text-surface-800 placeholder:text-surface-400 outline-none focus:ring-1 focus:ring-accent-400"
+                id="settings-api-key"
+                className="input-base min-w-0 flex-1"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 type={showKey ? "text" : "password"}
-                placeholder={remoteHasKey ? "Saved on server (enter to replace)" : "Paste your key here"}
+                placeholder={remoteHasKey ? "Enter a new key to replace it" : "Enter API key"}
                 disabled={loading || saving}
               />
               <button
                 className={clsx("btn-ghost p-2", (loading || saving) && "opacity-50 pointer-events-none")}
                 onClick={() => setShowKey((v) => !v)}
                 title={showKey ? "Hide" : "Show"}
+                aria-label={showKey ? "Hide API key" : "Show API key"}
               >
                 {showKey ? <EyeOff className="w-4 h-4 text-surface-400" /> : <Eye className="w-4 h-4 text-surface-400" />}
               </button>
-            </div>
-            <div className="text-[11px] text-surface-400">
-              {remoteHasKey ? "A key is saved for this guest." : "No key saved yet — you must add one to use the app."}
             </div>
           </div>
           </>
@@ -281,17 +337,17 @@ export function SettingsModal({ open, onClose }: Props) {
                 setLanguage(r.language ?? "en");
                 setApiKey("");
                 setLLMSettingsLocal({ protocol: r.protocol, baseUrl: r.base_url ?? "", hasKey: r.has_key, language: r.language ?? "en" });
-                setSuccess("Cleared server-side settings.");
+                setSuccess("Settings reset.");
               } catch (e: unknown) {
                 setError(e instanceof Error ? e.message : String(e));
               } finally {
                 setClearing(false);
               }
             }}
-            title="Clear server-side key/settings"
+            title="Reset saved model settings"
           >
             <Trash2 className="w-4 h-4 text-surface-400" />
-            Clear
+            Reset
           </button>
 
           <div className="flex items-center gap-2">
@@ -300,7 +356,7 @@ export function SettingsModal({ open, onClose }: Props) {
             </button>
             <button
               className={clsx(
-                "px-3 py-2 rounded-xl text-xs font-semibold",
+                "px-3 py-2 rounded-lg text-xs font-semibold",
                 saveDisabled
                   ? "bg-surface-100 text-surface-400 cursor-not-allowed"
                   : "bg-accent-600 text-white hover:bg-accent-500"
@@ -321,7 +377,7 @@ export function SettingsModal({ open, onClose }: Props) {
                   setRemoteHasKey(r.has_key);
                   setApiKey("");
                   setLLMSettingsLocal({ protocol: r.protocol, baseUrl: r.base_url ?? "", hasKey: r.has_key, language: r.language ?? language ?? "en" });
-                  setSuccess("Saved.");
+                  setSuccess("Settings saved.");
                 } catch (e: unknown) {
                   setError(e instanceof Error ? e.message : String(e));
                 } finally {
@@ -337,4 +393,3 @@ export function SettingsModal({ open, onClose }: Props) {
     </div>
   );
 }
-

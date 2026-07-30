@@ -19,11 +19,21 @@ import { ClarificationPanel } from "./shared/ClarificationPanel";
 import { ConversationalFlow, type GeneratedPlan } from "./shared/ConversationalFlow";
 import type { ProposalPlanMode, ProposalPlanRunResult } from "@/types";
 
+function questionsOverlap(left: string, right: string) {
+  const a = left.trim().toLowerCase();
+  const b = right.trim().toLowerCase();
+  if (!a || !b) return false;
+  return a.includes(b.slice(0, 30)) || b.includes(a.slice(0, 30));
+}
+
+let latestProposalPlanRequestToken = 0;
+
 export function ProposalPlanView() {
   const store = useProposalPlanStore();
   const { getActiveWorkspace } = useWorkspaceStore();
   const workspace = getActiveWorkspace();
   const wid = workspace?.id ?? "default";
+  const runStream = useProposalPlanRun(wid);
 
   const { status, result, clarificationQuestions, errorMessage } = store;
 
@@ -32,16 +42,17 @@ export function ProposalPlanView() {
   return (
     <TaskPageShell
       icon={<FileText className="w-4 h-4 text-accent-600" />}
-      title="Proposal / Plan"
+      title="Write"
+      description="Build a proposal or research plan from included sources."
     >
-      {status === "idle" && <InputForm workspaceId={wid} />}
+      {status === "idle" && <InputForm workspaceId={wid} runStream={runStream} />}
       {(status === "generating_plan" || status === "plan_ready") && (
-        <PPPlanStep workspaceId={wid} />
+        <PPPlanStep workspaceId={wid} runStream={runStream} />
       )}
       {status === "needs_clarification" && (
         <ClarificationPanel
           questions={clarificationQuestions}
-          onRetry={() => store.setStatus("idle")}
+          onRetry={store.clearPlan}
           onReset={store.reset}
         />
       )}
@@ -59,7 +70,7 @@ export function ProposalPlanView() {
           message={errorMessage}
           title={status === "blocked" ? "Blocked" : "Something went wrong"}
           onReset={store.reset}
-          onRetry={() => store.setStatus("idle")}
+          onRetry={store.clearPlan}
         />
       )}
     </TaskPageShell>
@@ -107,16 +118,16 @@ function PPInterruptedState() {
       <div className="flex items-start gap-3 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200">
         <RotateCcw className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-amber-800">Run was interrupted</p>
+          <p className="text-sm font-medium text-amber-800">Drafting stopped</p>
           <p className="text-xs text-amber-600 mt-1">
-            The page was refreshed while generating. The stream cannot be resumed.
+            This run stopped when the page refreshed.
           </p>
         </div>
       </div>
 
       {(generatedTitle || currentStageMessage || completedSections > 0) && (
         <div className="px-4 py-3 rounded-lg bg-surface-50 border border-surface-200 space-y-2">
-          <p className="text-xs font-medium text-surface-600">Last known progress:</p>
+          <p className="text-xs font-medium text-surface-600">Progress before interruption</p>
           {generatedTitle && (
             <p className="text-xs text-surface-700">Title: {generatedTitle}</p>
           )}
@@ -137,7 +148,7 @@ function PPInterruptedState() {
           className="btn-primary flex items-center gap-1.5 px-4 py-2 text-xs"
         >
           <RotateCcw className="w-3 h-3" />
-          Start Over
+          Back to setup
         </button>
         <p className="text-[11px] text-surface-400">
           Topic: {input.topic || "—"}
@@ -149,10 +160,11 @@ function PPInterruptedState() {
 
 /* ── InputForm (simplified) ──────────────────────────────────────────── */
 
-function InputForm({ workspaceId }: { workspaceId: string }) {
+type ProposalRun = ReturnType<typeof useProposalPlanRun>;
+
+function InputForm({ workspaceId, runStream }: { workspaceId: string; runStream: ProposalRun }) {
   const store = useProposalPlanStore();
   const { input, setInput } = store;
-  const runStream = useProposalPlanRun(workspaceId);
   const { getIncludedSources } = useSourceStore();
   const sources = getIncludedSources(workspaceId);
 
@@ -172,7 +184,7 @@ function InputForm({ workspaceId }: { workspaceId: string }) {
                   : "bg-surface-50 text-surface-500 border-surface-200 hover:bg-surface-100"
               )}
             >
-              {m === "proposal" ? "Proposal" : "Research Plan"}
+              {m === "proposal" ? "Proposal" : "Research plan"}
             </button>
           ))}
         </div>
@@ -206,15 +218,15 @@ function InputForm({ workspaceId }: { workspaceId: string }) {
           className="btn-primary flex items-center gap-1.5 px-4 py-2 text-xs"
         >
           <FlaskConical className="w-3.5 h-3.5" />
-          Start
+          Build outline
         </button>
         <button
-          onClick={runStream}
+          onClick={() => runStream()}
           disabled={!input.topic.trim()}
           className="btn-ghost flex items-center gap-1.5 px-3 py-2 text-xs text-surface-500"
         >
           <Play className="w-3.5 h-3.5" />
-          Run Directly
+          Draft without outline
         </button>
       </div>
     </div>
@@ -223,17 +235,23 @@ function InputForm({ workspaceId }: { workspaceId: string }) {
 
 /* ── Plan step (conversational flow) ──────────────────────────────────── */
 
-function PPPlanStep({ workspaceId }: { workspaceId: string }) {
+function PPPlanStep({ workspaceId, runStream }: { workspaceId: string; runStream: ProposalRun }) {
   const store = useProposalPlanStore();
   const { status, input, generatedPlan } = store;
   const { getIncludedSources } = useSourceStore();
   const { activePaper } = usePaperStore();
-  const runStream = useProposalPlanRun(workspaceId);
   const generating = useRef(false);
+  const requestTokenRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (requestTokenRef.current === latestProposalPlanRequestToken) latestProposalPlanRequestToken += 1;
+  }, []);
 
   const handleGeneratePlan = useCallback(async () => {
     if (generating.current) return;
     generating.current = true;
+    const requestToken = ++latestProposalPlanRequestToken;
+    requestTokenRef.current = requestToken;
     store.setStatus("generating_plan");
     try {
       const sources = getIncludedSources(workspaceId);
@@ -249,6 +267,7 @@ function PPPlanStep({ workspaceId }: { workspaceId: string }) {
         workspace_sources: wsPayload,
         active_paper_id: activePaper?.id ?? null,
       });
+      if (requestToken !== latestProposalPlanRequestToken || useWorkspaceStore.getState().activeWorkspaceId !== workspaceId) return;
       store.setGeneratedPlan({
         outlineSections: res.outline_sections,
         overallApproach: res.overall_approach,
@@ -258,9 +277,10 @@ function PPPlanStep({ workspaceId }: { workspaceId: string }) {
       });
       store.setStatus("plan_ready");
     } catch (err: unknown) {
+      if (requestToken !== latestProposalPlanRequestToken || useWorkspaceStore.getState().activeWorkspaceId !== workspaceId) return;
       store.setFailed(err instanceof Error ? err.message : "Plan generation failed");
     } finally {
-      generating.current = false;
+      if (requestToken === latestProposalPlanRequestToken) generating.current = false;
     }
   }, [input.topic, input.mode, workspaceId, activePaper, getIncludedSources, store]);
 
@@ -270,9 +290,18 @@ function PPPlanStep({ workspaceId }: { workspaceId: string }) {
     }
   }, [status, generatedPlan, handleGeneratePlan]);
 
-  const handleConfirmPlan = useCallback((_plan: GeneratedPlan) => {
-    runStream();
+  const handleConfirmPlan = useCallback((confirmedPlan: GeneratedPlan) => {
+    runStream({
+      outlineSections: (confirmedPlan.outlineSections ?? []).map((section) => section.title),
+      depth: confirmedPlan.recommendedDepth || "standard",
+    });
   }, [runStream]);
+
+  const handleEditTopic = useCallback(() => {
+    const { topic, mode } = input;
+    store.reset();
+    store.setInput({ topic, mode });
+  }, [input, store]);
 
   const plan: GeneratedPlan | null = generatedPlan
     ? {
@@ -292,7 +321,7 @@ function PPPlanStep({ workspaceId }: { workspaceId: string }) {
       isGenerating={status === "generating_plan"}
       onGeneratePlan={handleGeneratePlan}
       onConfirmPlan={handleConfirmPlan}
-      onCancel={store.reset}
+      onCancel={handleEditTopic}
     />
   );
 }
@@ -305,8 +334,24 @@ function ResultSummary({ result, workspaceId, onReset }: {
   onReset: () => void;
 }) {
   const { createdDeliverableId } = useProposalPlanStore();
-  const { setSelectedNav, setConsolePanelTab } = useWorkspaceStore();
+  const { setSelectedNav, setActiveViewerTab } = useWorkspaceStore();
   const { setActiveDeliverable, getDeliverables, selectSection } = useDeliverableStore();
+  const unresolvedQuestions = result.unresolved_questions ?? [];
+  const followUpItems = result.follow_up_items ?? [];
+  const openQuestions = [
+    ...unresolvedQuestions.map((title) => ({
+      title,
+      description: null as string | null,
+      inAgenda: followUpItems.some((item) => questionsOverlap(title, item.title)),
+    })),
+    ...followUpItems
+      .filter((item) => !unresolvedQuestions.some((title) => questionsOverlap(title, item.title)))
+      .map((item) => ({
+        title: item.title,
+        description: item.description || null,
+        inAgenda: true,
+      })),
+  ];
 
   const handleOpenDeliverable = () => {
     if (createdDeliverableId) {
@@ -315,15 +360,15 @@ function ResultSummary({ result, workspaceId, onReset }: {
       const firstSection = del?.sections.sort((a, b) => a.order - b.order)[0];
       if (firstSection) selectSection(createdDeliverableId, firstSection.id);
     }
-    setSelectedNav("console");
-    setConsolePanelTab("deliverable");
+    setActiveViewerTab("deliverable");
+    setSelectedNav("reader");
   };
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 text-emerald-700">
         <Check className="w-4 h-4" />
         <span className="text-sm font-medium">
-          {result.mode === "proposal" ? "Proposal" : "Research Plan"} draft complete
+          {result.mode === "proposal" ? "Proposal" : "Research plan"} draft complete
         </span>
       </div>
 
@@ -336,39 +381,28 @@ function ResultSummary({ result, workspaceId, onReset }: {
       <StatGrid
         stats={[
           { label: "Sections drafted", value: (result.section_updates ?? []).filter((u) => u.generated_content.trim()).length },
-          { label: "Sections skipped", value: (result.skipped_section_ids ?? []).length },
+          { label: "Not drafted", value: (result.skipped_section_ids ?? []).length },
           { label: "Sources used", value: (result.selected_source_ids ?? []).length },
-          { label: "DR context used", value: (result.deep_research_context_ids ?? []).length },
+          { label: "Research briefs used", value: (result.deep_research_context_ids ?? []).length },
         ]}
       />
 
-      {(result.unresolved_questions ?? []).length > 0 && (
+      {openQuestions.length > 0 && (
         <div>
-          <h4 className="text-xs font-medium text-surface-600 mb-1">Open questions</h4>
+          <h4 className="text-xs font-medium text-surface-600 mb-1.5">Open questions</h4>
           <div className="space-y-1">
-            {(result.unresolved_questions ?? []).slice(0, 5).map((q, i) => (
-              <div key={i} className="text-xs text-surface-600 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5">
-                {q}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {(result.follow_up_items ?? []).length > 0 && (
-        <div>
-          <h4 className="text-xs font-medium text-surface-600 mb-1">
-            Follow-up agenda items added
-            <span className="text-[10px] text-surface-400 font-normal ml-1">
-              ({(result.follow_up_items ?? []).length} promoted)
-            </span>
-          </h4>
-          <div className="space-y-1">
-            {(result.follow_up_items ?? []).slice(0, 5).map((item, i) => (
-              <div key={i} className="text-xs text-surface-600 bg-accent-50 border border-accent-200 rounded px-2.5 py-1.5">
-                <span className="font-medium">{item.title}</span>
-                {item.description && (
-                  <p className="text-[11px] text-surface-400 mt-0.5 line-clamp-1">{item.description}</p>
+            {openQuestions.slice(0, 8).map((item, i) => (
+              <div key={`${item.title}-${i}`} className="text-xs text-surface-600 bg-white border border-surface-200 rounded px-2.5 py-2 flex items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  <span>{item.title}</span>
+                  {item.description && (
+                    <p className="text-[11px] text-surface-500 mt-0.5 line-clamp-1">{item.description}</p>
+                  )}
+                </div>
+                {item.inAgenda && (
+                  <span className="text-[10px] text-accent-700 bg-accent-50 border border-accent-200 px-1.5 py-0.5 rounded shrink-0">
+                    In agenda
+                  </span>
                 )}
               </div>
             ))}
@@ -380,12 +414,12 @@ function ResultSummary({ result, workspaceId, onReset }: {
         {createdDeliverableId && (
           <button onClick={handleOpenDeliverable} className="btn-primary flex items-center gap-1.5 px-4 py-2 text-xs">
             <ExternalLink className="w-3.5 h-3.5" />
-            Open Deliverable
+            Open draft
           </button>
         )}
         <button onClick={onReset} className="btn-ghost flex items-center gap-1.5 px-3 py-2 text-xs">
           <RotateCcw className="w-3.5 h-3.5" />
-          New run
+          New draft
         </button>
       </div>
     </div>

@@ -46,10 +46,12 @@ export function DeliverableHeader({
       <div className="relative">
         <button
           onClick={() => setSwitcherOpen(!switcherOpen)}
+          aria-expanded={switcherOpen}
+          aria-label="Choose draft"
           className="flex items-center gap-1 text-xs text-surface-500 hover:text-surface-700 transition-colors"
         >
           <ChevronRight className={clsx("w-3 h-3 transition-transform", switcherOpen && "rotate-90")} />
-          <span className="font-medium">{deliverables.length} deliverable{deliverables.length !== 1 ? "s" : ""}</span>
+          <span className="font-medium">{deliverables.length} draft{deliverables.length !== 1 ? "s" : ""}</span>
         </button>
         {switcherOpen && (
           <div className="absolute left-0 top-full mt-1 z-20 bg-white border border-surface-200 rounded-lg shadow-lg py-1 min-w-[200px]">
@@ -121,10 +123,15 @@ export function DeliverableHeader({
             className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-accent-700 bg-accent-50 border border-accent-200 rounded-md hover:bg-accent-100 disabled:opacity-50 transition-colors"
           >
             <Sparkles className="w-3 h-3" />
-            Draft All
+            Draft all
           </button>
           <div className="relative">
-            <button onClick={() => setMenuOpen(!menuOpen)} className="p-1 rounded hover:bg-surface-100">
+            <button
+              onClick={() => setMenuOpen(!menuOpen)}
+              aria-expanded={menuOpen}
+              aria-label="Draft actions"
+              className="p-1 rounded hover:bg-surface-100"
+            >
               <MoreHorizontal className="w-4 h-4 text-surface-400" />
             </button>
           {menuOpen && (

@@ -14,6 +14,28 @@ from app.agents.console_intent import classify_console_intent, console_intent_to
 logger = structlog.get_logger()
 
 
+async def _paper_session_belongs_to_workspace(
+    session_id: str,
+    paper_id: str,
+    guest_id: str,
+    workspace_id: str,
+) -> bool:
+    """Reject client-supplied paper sessions outside the authenticated workspace."""
+    from app.db.postgres import AsyncSessionLocal
+    from app.models.orm import Paper, Session
+
+    async with AsyncSessionLocal() as db:
+        session = await db.get(Session, session_id)
+        if not session or session.guest_id != guest_id or session.paper_id != paper_id:
+            return False
+        paper = await db.get(Paper, paper_id)
+        return bool(
+            paper
+            and paper.guest_id == guest_id
+            and paper.workspace_id == workspace_id
+        )
+
+
 async def _get_llm(guest_id: str):
     from app.llm import LLMClient, resolve_llm_settings_for_guest
     resolved = await resolve_llm_settings_for_guest(guest_id)
@@ -108,11 +130,28 @@ async def run_console_turn(
     )
 
     # Route: paper_question → delegate to existing paper agent
-    if intent == "paper_question" and has_active_paper:
+    paper_session_id = ctx.get("active_paper_session_id")
+    if intent == "paper_question" and has_active_paper and paper_session_id:
+        active_paper_id = str(ctx.get("active_paper_id"))
+        if not await _paper_session_belongs_to_workspace(
+            str(paper_session_id), active_paper_id, guest_id, workspace_id,
+        ):
+            logger.warning(
+                "console_paper_session_rejected",
+                session_id=session_id,
+                paper_session_id=str(paper_session_id),
+                paper_id=active_paper_id,
+                workspace_id=workspace_id,
+            )
+            yield {
+                "type": "error",
+                "content": "That paper context is no longer available. Reopen the paper and try again.",
+            }
+            return
         yield {"type": "status", "content": "Routing to paper agent…"}
         from app.agents.graph import run_agent_turn
         async for msg in run_agent_turn(
-            session_id,
+            str(paper_session_id),
             question,
             question_id=None,
             guest_id=guest_id,
@@ -159,8 +198,23 @@ def _build_system_prompt(intent: str, ctx: dict) -> str:
                 line += f" ({', '.join(authors)})"
             if s.get('year'):
                 line += f" [{s['year']}]"
+            abstract = str(s.get("abstract") or "").strip()
+            if abstract:
+                line += f"\n  Abstract: {abstract[:500]}"
             source_lines.append(line)
         source_context = f"\n\nUser's workspace sources ({len(sources)} included):\n" + "\n".join(source_lines)
+
+    recent_messages = ctx.get("recent_messages") or []
+    history_context = ""
+    if recent_messages:
+        history_lines = []
+        for message in recent_messages[-8:]:
+            role = "User" if message.get("role") == "user" else "Assistant"
+            content = str(message.get("content") or "").strip()[:1600]
+            if content:
+                history_lines.append(f"{role}: {content}")
+        if history_lines:
+            history_context = "\n\nRecent conversation context:\n" + "\n".join(history_lines)
 
     base = (
         "You are a research assistant in PaperPilot, helping a scholar with their research workspace. "
@@ -168,7 +222,7 @@ def _build_system_prompt(intent: str, ctx: dict) -> str:
         "Use markdown formatting: headings, bullet lists, numbered lists, bold for emphasis. "
         "Always provide a substantive answer. Never ask for clarification unless the question is truly ambiguous. "
         "If the user's request is broad, make reasonable assumptions and provide useful content directly."
-        f"{source_context}"
+        f"{source_context}{history_context}"
     )
 
     if intent == "discover_sources":
@@ -196,7 +250,12 @@ def _build_system_prompt(intent: str, ctx: dict) -> str:
     if intent in ("deliverable_edit", "deliverable_draft"):
         section_info = ""
         if ctx.get("focused_section_id"):
-            section_info = f"\nThe user has a section focused (ID: {ctx['focused_section_id']})."
+            focused = ctx.get("focused_section") or {}
+            section_title = str(focused.get("title") or "Focused section")
+            section_content = str(focused.get("content") or "").strip()[:8000]
+            section_info = f"\nThe user has this section focused: {section_title}."
+            if section_content:
+                section_info += f"\n\nCurrent section text:\n---\n{section_content}\n---"
         deliverable_info = ""
         if ctx.get("deliverables"):
             deliverable_info = "\n\nCurrent deliverables in workspace:"
@@ -206,7 +265,7 @@ def _build_system_prompt(intent: str, ctx: dict) -> str:
                     deliverable_info += f"\n  • {s.get('title', '')} [{s.get('status', 'empty')}]"
         return (
             f"{base}\n\n"
-            "The user wants help with their research deliverable (e.g., literature review, proposal, report).{section_info}\n"
+            f"The user wants help with their research draft (e.g., literature review, proposal, report).{section_info}\n"
             f"{deliverable_info}\n"
             "Help them by:\n"
             "1. Providing concrete writing suggestions or improvements\n"
@@ -214,7 +273,7 @@ def _build_system_prompt(intent: str, ctx: dict) -> str:
             "3. Offering academic phrasing and transitions\n"
             "4. Identifying gaps in argumentation\n\n"
             "Write in an academic but clear style. Suggest specific text they can use directly.\n"
-            "Remind them they can use the Deliverable panel's AI Draft feature for full section generation."
+            "Remind them they can use the Draft panel for full section generation."
         )
 
     if intent == "navigation_or_open":

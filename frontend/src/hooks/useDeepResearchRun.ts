@@ -1,12 +1,15 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useDeepResearchStore, type DeepResearchStatus, type ActivityEvent } from "@/store/deepResearchStore";
 import { useDeliverableStore } from "@/store/deliverableStore";
 import { useSourceStore } from "@/store/sourceStore";
 import { useAgendaStore } from "@/store/agendaStore";
-import { useWorkspaceStore } from "@/store/workspaceStore";
 import { usePaperStore } from "@/store/paperStore";
+import { useWorkspaceStore } from "@/store/workspaceStore";
 import { api } from "@/api/client";
+import { getDeliverableRevision } from "@/lib/deliverableRevision";
 import type { DeepResearchRunResult, ClarificationQuestion } from "@/types";
+
+let latestDeepResearchRunToken = 0;
 
 export function useDeepResearchRun(workspaceId: string) {
   const store = useDeepResearchStore();
@@ -15,17 +18,30 @@ export function useDeepResearchRun(workspaceId: string) {
   const { activePaper } = usePaperStore();
   const { getDeliverables, createDeliverable, applyAIContent, setActiveDeliverable, renameDeliverable, replaceSections, selectSection } = useDeliverableStore();
   const { addSystemFollowup } = useAgendaStore();
-  const { setSelectedNav, setActiveViewerTab, setConsolePanelTab } = useWorkspaceStore();
 
   const sources = getIncludedSources(workspaceId);
   const deliverables = getDeliverables(workspaceId);
   const abortRef = useRef<AbortController | null>(null);
+  const tokenRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    if (tokenRef.current === latestDeepResearchRunToken) {
+      latestDeepResearchRunToken += 1;
+      const state = useDeepResearchStore.getState();
+      if (!["idle", "completed", "failed", "blocked", "needs_clarification", "interrupted"].includes(state.status)) {
+        state.setStatus("interrupted");
+      }
+    }
+  }, []);
 
   const runStream = useCallback(async () => {
     const { generatedPlan } = useDeepResearchStore.getState();
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    const runToken = ++latestDeepResearchRunToken;
+    tokenRef.current = runToken;
     startRun();
 
     const wsPayload = sources.map((s) => ({
@@ -44,6 +60,12 @@ export function useDeepResearchRun(workspaceId: string) {
           order: s.order, linkedSourceIds: s.linkedSourceIds,
         }))
       : [];
+    const baseDeliverableRevision = existingDel ? getDeliverableRevision(existingDel) : null;
+    const isCurrentRun = () => (
+      !controller.signal.aborted
+      && latestDeepResearchRunToken === runToken
+      && useWorkspaceStore.getState().activeWorkspaceId === workspaceId
+    );
 
     const prePlan = generatedPlan
       ? {
@@ -80,7 +102,10 @@ export function useDeepResearchRun(workspaceId: string) {
 
     try {
       await api.runDeepResearchStream(payload, (event) => {
-        if (controller.signal.aborted) return;
+        if (!isCurrentRun()) {
+          controller.abort();
+          return;
+        }
         const s = useDeepResearchStore.getState();
         const type = event.type as string;
 
@@ -233,6 +258,16 @@ export function useDeepResearchRun(workspaceId: string) {
 
           const res = (event.data ?? event) as DeepResearchRunResult;
 
+          if (existingDel && baseDeliverableRevision) {
+            const currentTarget = useDeliverableStore.getState()
+              .getDeliverables(workspaceId)
+              .find((deliverable) => deliverable.id === existingDel.id);
+            if (!currentTarget || getDeliverableRevision(currentTarget) !== baseDeliverableRevision) {
+              s.setBlocked("The target draft changed during research. Review your edits, then run again.");
+              return;
+            }
+          }
+
           if (res.discovered_sources) {
             for (const ds of res.discovered_sources) {
               addFromDiscovery(workspaceId, ds);
@@ -254,7 +289,7 @@ export function useDeepResearchRun(workspaceId: string) {
             renameDeliverable(workspaceId, delId, res.generated_title);
           }
 
-          if (res.generated_outline && res.generated_outline.length > 0) {
+          if (!existingDel && res.generated_outline && res.generated_outline.length > 0) {
             replaceSections(workspaceId, delId, res.generated_outline);
           }
 
@@ -292,22 +327,20 @@ export function useDeepResearchRun(workspaceId: string) {
             const del = getDeliverables(workspaceId).find((d) => d.id === finalDelId);
             const firstSection = del?.sections.sort((a, b) => a.order - b.order)[0];
             if (firstSection) selectSection(finalDelId, firstSection.id);
-            setActiveViewerTab("deliverable");
-            setSelectedNav("console");
-            setConsolePanelTab("deliverable");
           }
         }
       }, controller.signal);
 
+      if (!isCurrentRun()) return;
       const finalStatus = useDeepResearchStore.getState().status;
       if (!["completed", "failed", "blocked", "needs_clarification"].includes(finalStatus)) {
         setFailed("Stream ended unexpectedly. Please try again.");
       }
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") return;
-      setFailed(err instanceof Error ? err.message : "Request failed");
+      if (isCurrentRun()) setFailed(err instanceof Error ? err.message : "Request failed");
     }
-  }, [input, sources, workspaceId, activePaper, deliverables, startRun, setFailed, addFromDiscovery, setLabel, createDeliverable, applyAIContent, addSystemFollowup, setActiveDeliverable, renameDeliverable, replaceSections, selectSection, getDeliverables, setActiveViewerTab, setSelectedNav, setConsolePanelTab]);
+  }, [input, sources, workspaceId, activePaper, deliverables, startRun, setFailed, addFromDiscovery, setLabel, createDeliverable, applyAIContent, addSystemFollowup, setActiveDeliverable, renameDeliverable, replaceSections, selectSection, getDeliverables]);
 
   return runStream;
 }

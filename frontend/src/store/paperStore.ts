@@ -4,6 +4,8 @@ import { api } from "@/api/client";
 
 // Track which paper IDs are already being polled to avoid duplicate intervals
 const _activePolls = new Set<string>();
+let _workspaceGeneration = 0;
+let _selectionGeneration = 0;
 
 // ── localStorage helpers (workspace-scoped) ──────────────────────────────
 
@@ -75,10 +77,11 @@ interface PaperStore {
   isLoading: boolean;
   error: string | null;
   currentWorkspaceId: string | null;
+  loadedWorkspaceId: string | null;
 
   loadPapers: (workspaceId?: string) => Promise<void>;
   uploadPaper: (file: File, workspaceId?: string) => Promise<Paper>;
-  selectPaper: (id: string) => Promise<string[]>;
+  selectPaper: (id: string) => Promise<string[] | null>;
   deselectPaper: () => Promise<void>;
   deletePaper: (id: string) => Promise<void>;
   pollPaperStatus: (id: string) => void;
@@ -97,31 +100,54 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
   isLoading: false,
   error: null,
   currentWorkspaceId: null,
+  loadedWorkspaceId: null,
 
   loadPapers: async (workspaceId) => {
-    set({ isLoading: true, error: null, currentWorkspaceId: workspaceId ?? null });
+    const requestedWorkspaceId = workspaceId ?? null;
+    const requestGeneration = _workspaceGeneration;
+    set({ isLoading: true, error: null, currentWorkspaceId: requestedWorkspaceId });
     try {
       const papers = await api.listPapers(workspaceId);
-      set({ papers, isLoading: false });
+      if (get().currentWorkspaceId !== requestedWorkspaceId || _workspaceGeneration !== requestGeneration) return;
+      set({ papers, isLoading: false, loadedWorkspaceId: requestedWorkspaceId });
       papers.forEach((p) => {
         if (p.status === "pending" || p.status === "processing") {
           get().pollPaperStatus(p.id);
         }
       });
     } catch (e) {
+      if (get().currentWorkspaceId !== requestedWorkspaceId || _workspaceGeneration !== requestGeneration) return;
       set({ error: String(e), isLoading: false });
     }
   },
 
   uploadPaper: async (file, workspaceId) => {
+    const requestedWorkspaceId = workspaceId ?? null;
+    const requestGeneration = _workspaceGeneration;
     set({ isLoading: true, error: null });
     try {
       const paper = await api.uploadPaper(file, workspaceId);
-      const papers = await api.listPapers(workspaceId);
-      set({ papers, isLoading: false });
+      if (get().currentWorkspaceId !== requestedWorkspaceId || _workspaceGeneration !== requestGeneration) {
+        return paper;
+      }
+      set((state) => ({
+        papers: state.papers.some((candidate) => candidate.id === paper.id)
+          ? state.papers.map((candidate) => candidate.id === paper.id ? paper : candidate)
+          : [paper, ...state.papers],
+        isLoading: false,
+      }));
       get().pollPaperStatus(paper.id);
+      try {
+        const papers = await api.listPapers(workspaceId);
+        if (get().currentWorkspaceId === requestedWorkspaceId && _workspaceGeneration === requestGeneration) {
+          set({ papers, loadedWorkspaceId: requestedWorkspaceId });
+        }
+      } catch (refreshError) {
+        console.warn("[PaperPilot] paper list refresh failed after upload", refreshError);
+      }
       return paper;
     } catch (e) {
+      if (get().currentWorkspaceId !== requestedWorkspaceId || _workspaceGeneration !== requestGeneration) throw e;
       set({ error: String(e), isLoading: false });
       throw e;
     }
@@ -153,16 +179,26 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
   selectPaper: async (id) => {
     const { activePaper, activeSession, currentWorkspaceId } = get();
     const wsId = currentWorkspaceId ?? "default";
+    const requestGeneration = _workspaceGeneration;
+    const selectionGeneration = ++_selectionGeneration;
+    const isCurrentSelection = () => (
+      get().currentWorkspaceId === wsId
+      && _workspaceGeneration === requestGeneration
+      && _selectionGeneration === selectionGeneration
+    );
+    if (!get().papers.some((paper) => paper.id === id)) return null;
 
     if (activePaper?.id === id) {
       const sessionState = await api
         .getSessionState(activeSession?.id ?? "")
         .catch(() => ({}));
+      if (!isCurrentSelection() || get().activePaper?.id !== id) return null;
       return (sessionState as Record<string, unknown>).covered_question_ids as string[] ?? [];
     }
 
     set({ isLoading: true, error: null });
     try {
+      const { useChatStore } = await import("@/store/chatStore");
       const sessionMap = getSessionByPaperMap(wsId);
       const lastSessionId = sessionMap[id];
 
@@ -170,6 +206,7 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
       if (lastSessionId) {
         try {
           session = await api.getSession(lastSessionId);
+          if (session.paper_id !== id) throw new Error("Stored session belongs to another paper");
         } catch {
           session = await api.createSession(id);
         }
@@ -184,10 +221,11 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
         api.getSessionState(session.id).catch(() => ({})),
       ]);
 
+      if (!isCurrentSelection()) return null;
+
       saveActive(id, session.id, wsId);
       const coveredIds = (sessionState as any).covered_question_ids ?? [];
 
-      const { useChatStore } = await import("@/store/chatStore");
       useChatStore.getState().switchToSession(session.id, coveredIds);
 
       set({ activePaper: paper, activeSession: session, questions, chunks, isLoading: false });
@@ -195,8 +233,9 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
 
       return coveredIds;
     } catch (e) {
+      if (!isCurrentSelection()) return null;
       set({ error: String(e), isLoading: false });
-      return [];
+      return null;
     }
   },
 
@@ -204,37 +243,38 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
     const prev = get();
     const isActive = prev.activePaper?.id === id;
     const wsId = prev.currentWorkspaceId ?? "default";
-
-    set({
-      papers: prev.papers.filter((p) => p.id !== id),
-      ...(isActive
-        ? { activePaper: null, activeSession: null, questions: [], chunks: [] }
-        : {}),
-    });
-    if (isActive) {
-      clearActive(wsId);
-      const sessionId = prev.activeSession?.id;
-      const { useChatStore } = await import("@/store/chatStore");
-      if (sessionId) {
-        useChatStore.getState().clearSession(sessionId);
-      } else {
-        useChatStore.getState().clearChat();
-      }
-    }
-
-    const { useSourceStore } = await import("@/store/sourceStore");
-    const sources = useSourceStore.getState().getSources(wsId);
-    const matchingSource = sources.find((s) => s.paper_id === id);
-    if (matchingSource) {
-      useSourceStore.getState().removeSource(wsId, matchingSource.id);
-    }
+    const requestGeneration = _workspaceGeneration;
+    set({ isLoading: true, error: null });
 
     try {
+      const [{ useChatStore }, { useSourceStore }] = await Promise.all([
+        import("@/store/chatStore"),
+        import("@/store/sourceStore"),
+      ]);
       await api.deletePaper(id);
+      if (get().currentWorkspaceId !== prev.currentWorkspaceId || _workspaceGeneration !== requestGeneration) return;
+
+      if (isActive) {
+        _selectionGeneration += 1;
+        clearActive(wsId);
+        const sessionId = prev.activeSession?.id;
+        if (sessionId) useChatStore.getState().clearSession(sessionId);
+        else useChatStore.getState().clearChat();
+      }
+      clearSessionForPaper(id, wsId);
+      set({
+        papers: get().papers.filter((paper) => paper.id !== id),
+        isLoading: false,
+        ...(isActive ? { activePaper: null, activeSession: null, questions: [], chunks: [] } : {}),
+      });
+
+      const matchingSource = useSourceStore.getState().getSources(wsId).find((source) => source.paper_id === id);
+      if (matchingSource) useSourceStore.getState().removeSource(wsId, matchingSource.id);
     } catch (e) {
       console.debug("[PaperPilot] delete_fail", { paperId: id, error: String(e) });
-      const papers = await api.listPapers(prev.currentWorkspaceId ?? undefined).catch(() => prev.papers);
-      set({ papers });
+      if (get().currentWorkspaceId === prev.currentWorkspaceId && _workspaceGeneration === requestGeneration) {
+        set({ error: "Could not delete this paper. Try again.", isLoading: false });
+      }
     }
   },
 
@@ -265,11 +305,22 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
     const { activePaper, currentWorkspaceId } = get();
     if (!activePaper) return;
     const wsId = currentWorkspaceId ?? "default";
+    const paperId = activePaper.id;
+    const requestGeneration = _workspaceGeneration;
+    const selectionGeneration = _selectionGeneration;
     try {
-      const session = await api.createSession(activePaper.id);
-      saveActive(activePaper.id, session.id, wsId);
+      const [{ useChatStore }, session] = await Promise.all([
+        import("@/store/chatStore"),
+        api.createSession(paperId),
+      ]);
+      if (
+        get().currentWorkspaceId !== currentWorkspaceId
+        || get().activePaper?.id !== paperId
+        || _workspaceGeneration !== requestGeneration
+        || _selectionGeneration !== selectionGeneration
+      ) return;
+      saveActive(paperId, session.id, wsId);
 
-      const { useChatStore } = await import("@/store/chatStore");
       useChatStore.getState().switchToSession(session.id, []);
 
       set({ activeSession: session });
@@ -300,8 +351,19 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
 
   restoreActive: async (workspaceId) => {
     const wsId = workspaceId ?? get().currentWorkspaceId ?? "default";
+    const requestGeneration = _workspaceGeneration;
+    const selectionGeneration = ++_selectionGeneration;
+    const isCurrentRestore = () => (
+      get().currentWorkspaceId === wsId
+      && _workspaceGeneration === requestGeneration
+      && _selectionGeneration === selectionGeneration
+    );
     const stored = loadActive(wsId);
     if (!stored) return null;
+    if (!get().papers.some((paper) => paper.id === stored.paperId)) {
+      clearActive(wsId);
+      return null;
+    }
 
     let paper: Paper;
     try {
@@ -310,11 +372,13 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
       if (e instanceof Error && e.message.includes("404")) clearActive(wsId);
       return null;
     }
+    if (!isCurrentRestore()) return null;
     if (paper.status !== "ready") return null;
 
     let session: Session;
     try {
       session = await api.getSession(stored.sessionId);
+      if (session.paper_id !== stored.paperId) throw new Error("Stored session belongs to another paper");
     } catch {
       try {
         session = await api.createSession(stored.paperId);
@@ -323,6 +387,7 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
         return null;
       }
     }
+    if (!isCurrentRestore()) return null;
 
     try {
       const [questions, chunks, sessionState] = await Promise.all([
@@ -331,6 +396,8 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
         api.getSessionState(session.id).catch(() => ({})),
       ]);
 
+      if (!isCurrentRestore()) return null;
+
       const coveredIds = (sessionState as any).covered_question_ids ?? [];
       const { useChatStore } = await import("@/store/chatStore");
       useChatStore.getState().switchToSession(session.id, coveredIds);
@@ -338,6 +405,7 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
       set({ activePaper: paper, activeSession: session, questions, chunks });
       return coveredIds;
     } catch {
+      if (!isCurrentRestore()) return null;
       const { useChatStore } = await import("@/store/chatStore");
       useChatStore.getState().switchToSession(session.id, []);
       set({ activePaper: paper, activeSession: session, questions: [], chunks: [] });
@@ -346,12 +414,22 @@ export const usePaperStore = create<PaperStore>((set, get) => ({
   },
 
   resetForWorkspace: async (workspaceId) => {
-    set({ activePaper: null, activeSession: null, questions: [], chunks: [], papers: [] });
-    const { useChatStore } = await import("@/store/chatStore");
-    useChatStore.getState().clearChat();
+    const requestGeneration = ++_workspaceGeneration;
+    _selectionGeneration += 1;
+    set({
+      activePaper: null,
+      activeSession: null,
+      questions: [],
+      chunks: [],
+      papers: [],
+      error: null,
+      currentWorkspaceId: workspaceId,
+      loadedWorkspaceId: null,
+    });
     const { useAgendaStore } = await import("@/store/agendaStore");
     useAgendaStore.getState().clearVolatile();
     await get().loadPapers(workspaceId);
+    if (get().currentWorkspaceId !== workspaceId || _workspaceGeneration !== requestGeneration) return;
     await get().restoreActive(workspaceId);
   },
 }));

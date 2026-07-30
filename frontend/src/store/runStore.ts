@@ -16,9 +16,12 @@ interface RunState {
   message: string | null;
   previews: SectionPreview[];
   skippedSectionIds: string[];
+  workspaceId: string | null;
+  deliverableId: string | null;
+  runToken: number | null;
 
   setStatus: (status: RunStatus, message?: string) => void;
-  startRun: (action: string) => void;
+  startRun: (action: string, owner: { workspaceId: string; deliverableId: string; runToken: number }) => void;
   setResult: (previews: SectionPreview[], skipped: string[], message?: string) => void;
   setFailed: (message: string) => void;
   setBlocked: (message: string) => void;
@@ -33,10 +36,20 @@ export const useRunStore = create<RunState>()((set) => ({
   message: null,
   previews: [],
   skippedSectionIds: [],
+  workspaceId: null,
+  deliverableId: null,
+  runToken: null,
 
   setStatus: (status, message) => set({ status, message: message ?? null }),
 
-  startRun: (action) => set({ status: "preparing", action, message: null, previews: [], skippedSectionIds: [] }),
+  startRun: (action, owner) => set({
+    status: "preparing",
+    action,
+    message: null,
+    previews: [],
+    skippedSectionIds: [],
+    ...owner,
+  }),
 
   setResult: (previews, skipped, message) => {
     const hasReplace = previews.some((p) => p.mode === "preview_replace");
@@ -63,5 +76,14 @@ export const useRunStore = create<RunState>()((set) => ({
       };
     }),
 
-  reset: () => set({ status: "idle", action: null, message: null, previews: [], skippedSectionIds: [] }),
+  reset: () => set({
+    status: "idle",
+    action: null,
+    message: null,
+    previews: [],
+    skippedSectionIds: [],
+    workspaceId: null,
+    deliverableId: null,
+    runToken: null,
+  }),
 }));

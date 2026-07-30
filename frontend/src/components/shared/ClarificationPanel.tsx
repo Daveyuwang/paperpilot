@@ -17,7 +17,7 @@ export function ClarificationPanel({ questions, onRetry, onReset }: Props) {
     <div className="space-y-4">
       <div className="flex items-center gap-2 text-amber-700">
         <HelpCircle className="w-4 h-4" />
-        <span className="text-sm font-medium">Clarification needed</span>
+        <span className="text-sm font-medium">More detail needed</span>
       </div>
       <div className="space-y-3">
         {questions.map((q, i) => (
@@ -34,14 +34,14 @@ export function ClarificationPanel({ questions, onRetry, onReset }: Props) {
           onClick={onRetry}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-accent-700 bg-accent-50 border border-accent-200 rounded-md hover:bg-accent-100 transition-colors"
         >
-          Update and retry
+          Edit topic
         </button>
         {onReset && (
           <button
             onClick={onReset}
             className="text-xs text-surface-500 hover:text-surface-700 transition-colors"
           >
-            Start over
+            Clear topic
           </button>
         )}
       </div>

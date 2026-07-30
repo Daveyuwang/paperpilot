@@ -158,6 +158,7 @@ export const useProposalPlanStore = create<ProposalPlanState>()(
       startRun: () => set({
         status: "validating",
         result: null,
+        generatedPlan: null,
         clarificationQuestions: [],
         errorMessage: null,
         createdDeliverableId: null,

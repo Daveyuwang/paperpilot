@@ -22,7 +22,10 @@ export function PDFViewer({ paperId, highlightBboxes, targetPage, jumpCounter }:
   const overlayRef     = useRef<HTMLCanvasElement>(null);
   const containerRef   = useRef<HTMLDivElement>(null);
   const pdfRef         = useRef<pdfjs.PDFDocumentProxy | null>(null);
+  const loadingTaskRef = useRef<pdfjs.PDFDocumentLoadingTask | null>(null);
   const renderTaskRef  = useRef<pdfjs.RenderTask | null>(null);
+  const renderGenerationRef = useRef(0);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const baseDimsRef    = useRef<{ width: number; height: number } | null>(null);
 
   const [currentPage,   setCurrentPage]   = useState(1);
@@ -60,12 +63,20 @@ export function PDFViewer({ paperId, highlightBboxes, targetPage, jumpCounter }:
     baseDimsRef.current = null;
     const url = api.getPdfUrl(paperId);
 
-    pdfjs.getDocument({ url, withCredentials: false }).promise
+    let cancelled = false;
+    const loadingTask = pdfjs.getDocument({ url, withCredentials: false });
+    loadingTaskRef.current = loadingTask;
+    loadingTask.promise
       .then(async (doc) => {
+        if (cancelled) {
+          await doc.destroy();
+          return;
+        }
         pdfRef.current = doc;
         setTotalPages(doc.numPages);
 
         const firstPage = await doc.getPage(1);
+        if (cancelled) return;
         const baseViewport = firstPage.getViewport({ scale: 1 });
         baseDimsRef.current = { width: baseViewport.width, height: baseViewport.height };
 
@@ -82,12 +93,18 @@ export function PDFViewer({ paperId, highlightBboxes, targetPage, jumpCounter }:
         setDocumentReady(true);
       })
       .catch((err) => {
-        setError(`Failed to load PDF: ${err?.message ?? err}`);
+        if (cancelled || err?.name === "AbortException") return;
+        console.error("[PaperPilot] PDF load failed", err);
+        setError("Could not load this PDF. Try reopening it.");
         setLoading(false);
       });
 
     return () => {
+      cancelled = true;
+      renderGenerationRef.current += 1;
       renderTaskRef.current?.cancel();
+      loadingTaskRef.current?.destroy();
+      loadingTaskRef.current = null;
       pdfRef.current?.destroy();
       pdfRef.current = null;
     };
@@ -99,9 +116,13 @@ export function PDFViewer({ paperId, highlightBboxes, targetPage, jumpCounter }:
     const canvas = canvasRef.current;
     if (!pdf || !canvas) return;
 
+    const renderGeneration = ++renderGenerationRef.current;
     renderTaskRef.current?.cancel();
 
     const page     = await pdf.getPage(pageNum);
+    if (renderGeneration !== renderGenerationRef.current) return;
+    const baseViewport = page.getViewport({ scale: 1 });
+    baseDimsRef.current = { width: baseViewport.width, height: baseViewport.height };
     const viewport = page.getViewport({ scale: sc });
     canvas.width   = viewport.width;
     canvas.height  = viewport.height;
@@ -116,6 +137,7 @@ export function PDFViewer({ paperId, highlightBboxes, targetPage, jumpCounter }:
       if (e instanceof Error && e.name === "RenderingCancelledException") return;
       throw e;
     }
+    if (renderGeneration !== renderGenerationRef.current) return;
 
     const overlay = overlayRef.current;
     if (!overlay) return;
@@ -141,27 +163,48 @@ export function PDFViewer({ paperId, highlightBboxes, targetPage, jumpCounter }:
   }, []);
 
   const flashPage = useCallback(() => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
     setIsFlashing(true);
-    setTimeout(() => setIsFlashing(false), 600);
+    flashTimerRef.current = setTimeout(() => setIsFlashing(false), 600);
+  }, []);
+
+  useEffect(() => () => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
   }, []);
 
   // Re-render when page / scale / highlights change
   useEffect(() => {
     if (documentReady && !error) {
-      renderPage(currentPage, scale, highlightBboxes);
+      renderPage(currentPage, scale, highlightBboxes).catch((renderError) => {
+        if ((renderError as Error)?.name === "RenderingCancelledException") return;
+        console.error("[PaperPilot] PDF render failed", renderError);
+        setError("Could not render this page. Try reopening the paper.");
+      });
     }
   }, [currentPage, scale, documentReady, error, highlightBboxes, renderPage]);
 
   // Jump to targetPage when citation is clicked
   useEffect(() => {
-    if (!documentReady || !targetPage || targetPage < 1) return;
-    if (targetPage !== currentPage) {
-      setCurrentPage(targetPage);
+    if (!documentReady || !targetPage || targetPage < 1 || totalPages < 1) return;
+    const safeTargetPage = Math.min(totalPages, targetPage);
+    if (safeTargetPage !== currentPage) {
+      setCurrentPage(safeTargetPage);
       flashPage();
     } else {
       flashPage();
     }
-  }, [targetPage, jumpCounter, documentReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [targetPage, jumpCounter, documentReady, totalPages]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !documentReady || viewMode === "custom") return;
+    const observer = new ResizeObserver(() => {
+      const nextScale = viewMode === "fit-page" ? computeFitPage() : computeFitWidth();
+      if (nextScale != null) setScale((current) => Math.abs(current - nextScale) < 0.01 ? current : nextScale);
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [computeFitPage, computeFitWidth, documentReady, viewMode]);
 
   // Zoom handlers
   const zoomOut = () => { setViewMode("custom"); setScale((s) => Math.max(0.5, +(s - 0.15).toFixed(2))); };
@@ -185,19 +228,21 @@ export function PDFViewer({ paperId, highlightBboxes, targetPage, jumpCounter }:
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-surface-200 flex-shrink-0 gap-2">
+      <div className="flex-shrink-0 overflow-x-auto border-b border-surface-200 px-3 py-1.5">
+        <div className="flex min-w-max items-center justify-between gap-4">
         <div className="flex items-center gap-0.5">
-          <button className="btn-ghost p-1.5" onClick={zoomOut} title="Zoom out">
+          <button className="btn-ghost p-1.5" onClick={zoomOut} title="Zoom out" aria-label="Zoom out">
             <ZoomOut className="w-3.5 h-3.5" />
           </button>
           <button
             className="text-xs text-surface-500 hover:text-surface-700 px-1.5 py-1 rounded hover:bg-surface-100 transition-colors tabular-nums min-w-[3rem] text-center"
             onClick={handleActualSize}
             title="Reset to 100%"
+            aria-label="Show PDF at actual size"
           >
             {Math.round(scale * 100)}%
           </button>
-          <button className="btn-ghost p-1.5" onClick={zoomIn} title="Zoom in">
+          <button className="btn-ghost p-1.5" onClick={zoomIn} title="Zoom in" aria-label="Zoom in">
             <ZoomIn className="w-3.5 h-3.5" />
           </button>
           <div className="w-px h-4 bg-surface-200 mx-1" />
@@ -208,6 +253,7 @@ export function PDFViewer({ paperId, highlightBboxes, targetPage, jumpCounter }:
             )}
             onClick={handleFitWidth}
             title="Fit width"
+            aria-label="Fit PDF to width"
           >
             <ArrowLeftRight className="w-3 h-3" />
           </button>
@@ -218,6 +264,7 @@ export function PDFViewer({ paperId, highlightBboxes, targetPage, jumpCounter }:
             )}
             onClick={handleFitPage}
             title="Fit page"
+            aria-label="Fit whole PDF page"
           >
             <Maximize className="w-3 h-3" />
           </button>
@@ -227,6 +274,7 @@ export function PDFViewer({ paperId, highlightBboxes, targetPage, jumpCounter }:
             className="btn-ghost p-1.5"
             onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
             disabled={currentPage <= 1}
+            aria-label="Previous page"
           >
             <ChevronLeft className="w-4 h-4" />
           </button>
@@ -235,9 +283,11 @@ export function PDFViewer({ paperId, highlightBboxes, targetPage, jumpCounter }:
             className="btn-ghost p-1.5"
             onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
             disabled={currentPage >= totalPages}
+            aria-label="Next page"
           >
             <ChevronRight className="w-4 h-4" />
           </button>
+        </div>
         </div>
       </div>
 
@@ -255,8 +305,8 @@ export function PDFViewer({ paperId, highlightBboxes, targetPage, jumpCounter }:
           </div>
         ) : (
           <div className="relative inline-block shadow-lg rounded overflow-hidden flex-shrink-0">
-            <canvas ref={canvasRef} className="block" />
-            <canvas ref={overlayRef} className="absolute inset-0 pointer-events-none" />
+            <canvas ref={canvasRef} className="block" role="img" aria-label={`PDF page ${currentPage} of ${totalPages}`} />
+            <canvas ref={overlayRef} className="absolute inset-0 pointer-events-none" aria-hidden="true" />
             {isFlashing && (
               <div
                 className="absolute inset-0 pointer-events-none rounded"

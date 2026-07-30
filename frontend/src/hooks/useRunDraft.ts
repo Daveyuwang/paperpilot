@@ -1,9 +1,10 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useSourceStore } from "@/store/sourceStore";
 import { usePaperStore } from "@/store/paperStore";
 import { useDeliverableStore } from "@/store/deliverableStore";
 import { useRunStore } from "@/store/runStore";
 import { api } from "@/api/client";
+import { getDeliverableRevision } from "@/lib/deliverableRevision";
 import type { Deliverable, DeliverableSection, WorkspaceSource } from "@/types";
 
 function buildSourcesPayload(sources: WorkspaceSource[]) {
@@ -29,6 +30,8 @@ function buildSectionsPayload(sections: DeliverableSection[]) {
   }));
 }
 
+let latestDraftRunToken = 0;
+
 export function useRunDraft(deliverable: Deliverable | null, workspaceId: string) {
   const { getIncludedSources } = useSourceStore();
   const { activePaper } = usePaperStore();
@@ -36,6 +39,14 @@ export function useRunDraft(deliverable: Deliverable | null, workspaceId: string
   const { startRun, setResult, setFailed, setBlocked } = useRunStore();
   const sources = getIncludedSources(workspaceId);
   const abortRef = useRef<AbortController | null>(null);
+  const tokenRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    if (tokenRef.current === latestDraftRunToken) latestDraftRunToken += 1;
+    const current = useRunStore.getState();
+    if (current.runToken === tokenRef.current) current.reset();
+  }, []);
 
   const run = useCallback(
     async (action: string, selectedSectionId?: string, revisionInstruction?: string) => {
@@ -43,7 +54,19 @@ export function useRunDraft(deliverable: Deliverable | null, workspaceId: string
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
-      startRun(action);
+      const runToken = ++latestDraftRunToken;
+      tokenRef.current = runToken;
+      const baseRevision = getDeliverableRevision(deliverable);
+      const isCurrentRun = () => {
+        const currentDeliverable = useDeliverableStore.getState()
+          .getDeliverables(workspaceId)
+          .find((candidate) => candidate.id === deliverable.id);
+        return !controller.signal.aborted
+          && latestDraftRunToken === runToken
+          && useRunStore.getState().runToken === runToken
+          && !!currentDeliverable;
+      };
+      startRun(action, { workspaceId, deliverableId: deliverable.id, runToken });
       try {
         const store = useRunStore.getState();
         store.setStatus("generating");
@@ -62,7 +85,7 @@ export function useRunDraft(deliverable: Deliverable | null, workspaceId: string
         };
 
         await api.runDraftStream(payload, (event) => {
-          if (controller.signal.aborted) return;
+          if (!isCurrentRun()) return;
           const s = useRunStore.getState();
           const type = event.type as string;
 
@@ -92,9 +115,21 @@ export function useRunDraft(deliverable: Deliverable | null, workspaceId: string
                 notes: u.notes,
               }));
 
-              // Auto-apply fill_empty results (no user review needed for empty sections)
-              const fillEmpty = allPreviews.filter((p) => p.mode === "fill_empty");
-              const needsReview = allPreviews.filter((p) => p.mode === "preview_replace");
+              const currentDeliverable = useDeliverableStore.getState()
+                .getDeliverables(workspaceId)
+                .find((candidate) => candidate.id === deliverable.id);
+              if (!currentDeliverable) return;
+              const draftChanged = getDeliverableRevision(currentDeliverable) !== baseRevision;
+              // A changed draft must never be overwritten automatically. Keep every
+              // result as a reviewable preview instead.
+              const fillEmpty = draftChanged ? [] : allPreviews.filter((p) => p.mode === "fill_empty");
+              const needsReview = draftChanged
+                ? allPreviews.map((preview) => ({
+                    ...preview,
+                    mode: "preview_replace" as const,
+                    notes: preview.notes ?? "Draft changed during generation; review before applying.",
+                  }))
+                : allPreviews.filter((p) => p.mode === "preview_replace");
 
               for (const p of fillEmpty) {
                 applyAIContent(workspaceId, deliverable!.id, p.sectionId, p.generatedContent, "draft", p.sourceIdsUsed);
@@ -110,13 +145,14 @@ export function useRunDraft(deliverable: Deliverable | null, workspaceId: string
         }, controller.signal);
 
         // Fallback if stream ended without terminal event
+        if (!isCurrentRun()) return;
         const finalStatus = useRunStore.getState().status;
         if (finalStatus === "generating") {
           setFailed("Stream ended unexpectedly. Please try again.");
         }
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        setFailed(err instanceof Error ? err.message : "Request failed");
+        if (isCurrentRun()) setFailed(err instanceof Error ? err.message : "Request failed");
       }
     },
     [deliverable, workspaceId, sources, activePaper, startRun, setResult, setFailed, setBlocked, applyAIContent],

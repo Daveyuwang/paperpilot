@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import React from "react";
 import {
   Plus, Link2, X, Check,
-  Sparkles, RotateCcw,
+  Sparkles, RotateCcw, Pencil,
 } from "lucide-react";
 import clsx from "clsx";
 import { useDeliverableStore } from "@/store/deliverableStore";
@@ -86,7 +86,7 @@ export function SectionEditor({ deliverable, workspaceId, runDraft }: { delivera
             <Sparkles className="w-2.5 h-2.5" />
             <span>Last {section.lastAIMode === "revise" ? "revised" : "drafted"} by AI</span>
             {section.lastSourceIdsUsed && section.lastSourceIdsUsed.length > 0 && (
-              <span className="text-surface-300">
+              <span className="text-surface-400">
                 · {section.lastSourceIdsUsed.length} source{section.lastSourceIdsUsed.length !== 1 ? "s" : ""} used
               </span>
             )}
@@ -323,7 +323,7 @@ function DiffView({ oldText, newText }: { oldText: string; newText: string }) {
             line.type === "unchanged" && "border-transparent text-surface-500",
           )}
         >
-          <span className="inline-block w-4 text-[10px] text-surface-300 select-none mr-2">
+          <span className="inline-block w-4 text-[10px] text-surface-400 select-none mr-2">
             {line.type === "removed" ? "\u2212" : line.type === "added" ? "+" : " "}
           </span>
           {line.text || "\u00A0"}
@@ -358,7 +358,7 @@ function SectionTitleInput({
       value={value}
       onChange={handleChange}
       placeholder="Section title"
-      className="w-full heading-serif text-lg text-surface-800 bg-transparent border-none focus:outline-none focus:ring-0 placeholder:text-surface-300"
+      className="w-full heading-serif text-lg text-surface-800 bg-transparent border-none focus:outline-none focus:ring-0 placeholder:text-surface-400"
     />
   );
 }
@@ -396,12 +396,20 @@ function SectionContentEditor({
 
   if (!editing && value.trim()) {
     return (
-      <div
-        onClick={() => setEditing(true)}
-        className="min-h-[120px] text-sm text-surface-700 leading-relaxed cursor-text hover:bg-surface-50 rounded-lg px-1 py-1 -mx-1 transition-colors"
-        title="Click to edit"
-      >
-        <MarkdownRenderer content={value} />
+      <div className="min-h-[120px]">
+        <div className="mb-2 flex justify-end">
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="btn-ghost inline-flex items-center gap-1.5 px-2 py-1 text-xs"
+          >
+            <Pencil className="h-3 w-3" aria-hidden="true" />
+            Edit text
+          </button>
+        </div>
+        <div className="text-sm leading-relaxed text-surface-700">
+          <MarkdownRenderer content={value} />
+        </div>
       </div>
     );
   }
@@ -416,13 +424,8 @@ function SectionContentEditor({
         onBlur={() => { if (value.trim()) setEditing(false); }}
         placeholder="Start writing..."
         autoFocus={editing}
-        className="w-full min-h-[120px] text-sm text-surface-700 leading-relaxed bg-transparent border-none focus:outline-none focus:ring-0 resize-none placeholder:text-surface-300"
+        className="w-full min-h-[120px] text-sm text-surface-700 leading-relaxed bg-transparent border-none focus:outline-none focus:ring-0 resize-none placeholder:text-surface-400"
       />
-      {!value.trim() && !editing && (
-        <p className="text-[11px] text-surface-400 mt-1">
-          Run Deep Research or ask the Console to draft this section
-        </p>
-      )}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { FileText, MessageSquare, ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, MessageSquare } from "lucide-react";
 import type { Citation } from "@/types";
 import { usePaperStore } from "@/store/paperStore";
 import { useWorkspaceStore } from "@/store/workspaceStore";
@@ -31,51 +31,41 @@ export function ReaderPage({
   onQueuedQuestionHandled,
 }: Props) {
   const { activePaper } = usePaperStore();
-  const { setSelectedNav } = useWorkspaceStore();
-
-  if (!activePaper) {
-    return (
-      <div className="flex items-center justify-center h-full bg-white">
-        <div className="text-center">
-          <FileText className="w-10 h-10 text-surface-300 mx-auto mb-3" />
-          <p className="text-sm font-medium text-surface-600">No paper selected</p>
-          <p className="text-xs text-surface-400 mt-1">Select a paper from the source rail to start reading</p>
-        </div>
-      </div>
-    );
-  }
+  const { setSelectedNav, getActiveWorkspace } = useWorkspaceStore();
+  const activeViewerTab = getActiveWorkspace()?.activeViewerTab;
 
   return (
-    <div className="flex h-full min-w-0 bg-white">
-      {/* Left: Paper QA chat */}
-      <div className="flex flex-col flex-[6] min-w-[400px] max-w-[600px] border-r border-surface-200">
-        {/* Identity header */}
-        <div className="flex-shrink-0 px-4 py-2 border-b border-surface-200 bg-surface-50 flex items-center gap-2">
-          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-accent-600 bg-accent-50 border border-accent-200 px-1.5 py-0.5 rounded uppercase tracking-wider">
-            <MessageSquare className="w-2.5 h-2.5" />
-            Paper QA
-          </span>
-          <span className="text-xs text-surface-500 truncate flex-1">{activePaper.title ?? activePaper.filename}</span>
-          <button
-            onClick={() => setSelectedNav("console")}
-            className="inline-flex items-center gap-1 text-[10px] text-surface-400 hover:text-accent-600 transition-colors flex-shrink-0"
-            title="Switch to workspace console (keeps paper context)"
-          >
-            <ArrowUpRight className="w-2.5 h-2.5" />
-            Console
-          </button>
-        </div>
-        <div className="flex-1 min-h-0">
-          <QAPanel
-            onHighlight={onHighlight}
-            queuedQuestion={queuedQuestion}
-            onQueuedQuestionHandled={onQueuedQuestionHandled}
-          />
-        </div>
-      </div>
+    <div className="flex h-full min-w-0 flex-col overflow-y-auto bg-white 2xl:flex-row 2xl:overflow-hidden">
+      {activePaper && activeViewerTab === "reader" && (
+        <section className="flex min-h-[55vh] min-w-0 flex-col border-b border-surface-200 2xl:min-h-0 2xl:flex-[6] 2xl:border-b-0 2xl:border-r" aria-label="Paper chat">
+          <div className="flex flex-shrink-0 items-center gap-2 border-b border-surface-200 bg-surface-50 px-4 py-2.5">
+            <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-accent-700">
+              <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
+              This paper
+            </span>
+            <span className="min-w-0 flex-1 truncate text-xs text-surface-500">
+              {activePaper.title ?? activePaper.filename}
+            </span>
+            <button
+              onClick={() => setSelectedNav("console")}
+              className="inline-flex flex-shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-surface-500 hover:bg-surface-100 hover:text-accent-700"
+              aria-label="Ask across all workspace sources"
+            >
+              Ask all sources
+              <ArrowUpRight className="h-3 w-3" aria-hidden="true" />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1">
+            <QAPanel
+              onHighlight={onHighlight}
+              queuedQuestion={queuedQuestion}
+              onQueuedQuestionHandled={onQueuedQuestionHandled}
+            />
+          </div>
+        </section>
+      )}
 
-      {/* Right: Viewer tabs */}
-      <div className="flex-[7] min-w-0">
+      <section className="min-h-[60vh] min-w-0 flex-[7] 2xl:min-h-0" aria-label="Library viewer">
         <ViewerLane
           highlightBboxes={highlightBboxes}
           targetPage={targetPage}
@@ -84,7 +74,7 @@ export function ReaderPage({
           onShowInPaper={onShowInPaper}
           onTrailAsk={onTrailAsk}
         />
-      </div>
+      </section>
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
 export type ViewerTab = "reader" | "deliverable" | "sources" | "agenda" | "concepts";
-export type NavItem = "workspace" | "console" | "reader" | "deep-research" | "proposal" | "settings";
+export type NavItem = "workspace" | "console" | "reader" | "deep-research" | "proposal";
 
 export interface Workspace {
   id: string;
@@ -14,15 +14,11 @@ export interface Workspace {
   activeViewerTab: ViewerTab;
 }
 
-export type ConsolePanelTab = "deliverable" | "sources";
-
 interface WorkspaceStore {
   workspaces: Record<string, Workspace>;
   activeWorkspaceId: string | null;
   appView: "home" | "shell";
   selectedNav: NavItem;
-  consolePanelOpen: boolean;
-  consolePanelTab: ConsolePanelTab;
 
   createWorkspace: (title: string, objective?: string) => Workspace;
   deleteWorkspace: (id: string) => void;
@@ -35,12 +31,10 @@ interface WorkspaceStore {
   setActiveViewerTab: (tab: ViewerTab) => void;
   setActivePaperId: (id: string | null) => void;
   setSelectedNav: (item: NavItem) => void;
-  setConsolePanelOpen: (open: boolean) => void;
-  setConsolePanelTab: (tab: ConsolePanelTab) => void;
 }
 
 const VALID_VIEWER_TABS: ViewerTab[] = ["reader", "deliverable", "sources", "agenda", "concepts"];
-const VALID_NAV_ITEMS: NavItem[] = ["workspace", "console", "reader", "deep-research", "proposal", "settings"];
+const VALID_NAV_ITEMS: NavItem[] = ["workspace", "console", "reader", "deep-research", "proposal"];
 
 function wsId(): string {
   return `ws_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -53,8 +47,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
       activeWorkspaceId: null,
       appView: "home",
       selectedNav: "workspace",
-      consolePanelOpen: true,
-      consolePanelTab: "deliverable",
 
       createWorkspace: (title, objective) => {
         const id = wsId();
@@ -140,8 +132,6 @@ export const useWorkspaceStore = create<WorkspaceStore>()(
         }),
 
       setSelectedNav: (item) => set({ selectedNav: item }),
-      setConsolePanelOpen: (open) => set({ consolePanelOpen: open }),
-      setConsolePanelTab: (tab) => set({ consolePanelTab: tab }),
     }),
     {
       name: "pp_workspace",

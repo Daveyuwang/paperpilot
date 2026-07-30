@@ -55,7 +55,7 @@ export function PaperList({ onSelect }: Props) {
   const { selectedNav } = useWorkspaceStore();
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const handleSelect = onSelect ?? selectPaper;
-  const isSwitching = isLoading && !!activePaper;
+  const isSwitching = isLoading;
   const showActive = selectedNav === "reader";
 
   useEffect(() => {
@@ -74,14 +74,14 @@ export function PaperList({ onSelect }: Props) {
 
   if (papers.length === 0) {
     return (
-      <p className="text-center text-xs text-surface-400 py-4">No papers uploaded yet.</p>
+      <p className="py-4 text-center text-xs text-surface-400">No papers yet.</p>
     );
   }
 
   return (
-    <ul className="space-y-0.5">
+    <ul className="flex gap-1 overflow-x-auto lg:block lg:space-y-0.5">
       {papers.map((paper) => (
-        <li key={paper.id}>
+        <li key={paper.id} className="w-48 flex-shrink-0 lg:w-auto">
           <div
             className={clsx(
               "w-full px-2.5 py-2 rounded-lg flex items-start gap-2 transition-colors group",
@@ -101,6 +101,7 @@ export function PaperList({ onSelect }: Props) {
                 }
               }}
               disabled={paper.status !== "ready" || isSwitching}
+              aria-current={showActive && activePaper?.id === paper.id ? "true" : undefined}
             >
               <FileText className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-surface-400" />
               <div className="flex-1 min-w-0">
@@ -125,12 +126,13 @@ export function PaperList({ onSelect }: Props) {
             ) : (
               <button
                 type="button"
-                className="opacity-0 group-hover:opacity-100 p-1 text-surface-400 hover:text-red-500 transition rounded flex-shrink-0"
+                className="flex-shrink-0 rounded p-1 text-surface-400 opacity-100 transition hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
                 onClick={(e) => {
                   e.stopPropagation();
                   setConfirmingDelete(paper.id);
                 }}
                 title="Delete paper"
+                aria-label={`Delete ${paper.title ?? paper.filename}`}
               >
                 <Trash2 className="w-3 h-3" />
               </button>

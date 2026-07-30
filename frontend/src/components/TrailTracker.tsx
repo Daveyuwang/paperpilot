@@ -89,8 +89,8 @@ export function TrailTracker({ onAsk }: Props) {
       {/* Overall progress */}
       <div className="px-1">
         <div className="flex justify-between items-baseline mb-2">
-          <span className="text-xs font-semibold text-surface-500">Reading map</span>
-          <span className="text-xs text-surface-400">{totalCovered} / {questions.length} explored</span>
+          <span className="text-xs font-semibold text-surface-500">Reading guide</span>
+          <span className="text-xs text-surface-400">{totalCovered} / {questions.length} answered</span>
         </div>
         <div className="h-1 bg-surface-200 rounded-full overflow-hidden">
           <div

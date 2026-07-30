@@ -409,25 +409,14 @@ def _validate_and_clarify(req: ProposalPlanRequest) -> list[ClarificationQuestio
         ))
 
     if inp.mode == "proposal":
-        words = topic.split()
-        if len(words) <= 2 and not inp.problem_statement and not inp.focus:
+        compact_length = sum(1 for char in topic if char.isalnum())
+        uses_non_ascii_script = any(ord(char) > 127 and char.isalpha() for char in topic)
+        minimum_specificity = 8 if uses_non_ascii_script else 18
+        if compact_length < minimum_specificity and not inp.problem_statement and not inp.focus:
             questions.append(ClarificationQuestion(
-                field="problem_statement",
-                question="The topic is quite broad. What specific problem are you trying to address?",
-                suggestion="Add a problem statement or focus to narrow the scope.",
-            ))
-        if not inp.motivation and not inp.problem_statement and not inp.notes:
-            questions.append(ClarificationQuestion(
-                field="motivation",
-                question="What motivates this proposal? A brief motivation helps ground the writing.",
-            ))
-
-    if inp.mode == "research_plan":
-        if not inp.planning_horizon and not inp.intended_deliverables and not inp.risks:
-            questions.append(ClarificationQuestion(
-                field="planning_horizon",
-                question="What time horizon should the research plan cover?",
-                suggestion="e.g. 1 week, 2 weeks, 1 month",
+                field="topic",
+                question="Add the problem and intended outcome to make this topic more specific.",
+                suggestion="For example: Evaluate retrieval methods for long-context QA and propose an implementation plan.",
             ))
 
     return questions
@@ -667,11 +656,23 @@ async def run_proposal_plan(
         )
 
     # 5. Resolve sections (two-stage: generate tailored outline if no existing sections)
+    generated_title: str | None = None
+    generated_outline: list[str] | None = None
+    preplanned_titles = [
+        title.strip()
+        for title in (req.pre_plan.outline_sections if req.pre_plan else [])
+        if title.strip()
+    ][:8]
+
     if req.existing_sections:
         sections = [(s.id, s.title, s.content) for s in sorted(req.existing_sections, key=lambda x: x.order)]
-        generated_title = None
+    elif preplanned_titles:
+        generated_title = "Proposal Draft" if inp.mode == "proposal" else "Research Plan"
+        generated_outline = preplanned_titles
+        sections = [(f"new-{i}", title, "") for i, title in enumerate(preplanned_titles)]
     else:
         generated_title, tailored_titles = await _generate_tailored_outline(llm, inp, selected, dr_context_text)
+        generated_outline = tailored_titles
         sections = [(f"new-{i}", title, "") for i, title in enumerate(tailored_titles)]
 
     # 6. Draft sections
@@ -702,7 +703,7 @@ async def run_proposal_plan(
         mode=inp.mode,
         status="completed",
         generated_title=generated_title,
-        generated_outline=[title for _, title, _ in sections] if not req.existing_sections else None,
+        generated_outline=generated_outline,
         section_updates=updates,
         updated_section_ids=updated_ids,
         skipped_section_ids=skipped_ids,
@@ -799,8 +800,24 @@ async def run_proposal_plan_stream(
             })
 
             # 4. Resolve sections (two-stage: generate tailored outline if no existing sections)
+            generated_title: str | None = None
+            generated_outline: list[str] | None = None
+            preplanned_titles = [
+                title.strip()
+                for title in (req.pre_plan.outline_sections if req.pre_plan else [])
+                if title.strip()
+            ][:8]
+
             if req.existing_sections:
                 sections = [(s.id, s.title, s.content) for s in sorted(req.existing_sections, key=lambda x: x.order)]
+            elif preplanned_titles:
+                generated_title = "Proposal Draft" if inp.mode == "proposal" else "Research Plan"
+                generated_outline = preplanned_titles
+                sections = [(f"new-{i}", title, "") for i, title in enumerate(preplanned_titles)]
+                yield emit("tailored_outline", {
+                    "generated_title": generated_title,
+                    "sections": preplanned_titles,
+                })
             else:
                 yield emit("stage", {"stage": "generating_outline", "message": "Generating tailored outline..."})
                 yield emit("activity", {"activity_type": "thinking", "label": "Generating tailored outline..."})
@@ -811,6 +828,7 @@ async def run_proposal_plan_stream(
                     except Exception:
                         pass
                 generated_title, tailored_titles = await _generate_tailored_outline(llm, inp, selected, dr_context_text)
+                generated_outline = tailored_titles
                 sections = [(f"new-{i}", title, "") for i, title in enumerate(tailored_titles)]
                 yield emit("tailored_outline", {
                     "generated_title": generated_title,
@@ -945,6 +963,8 @@ async def run_proposal_plan_stream(
                     "status": "failed", "run_id": run_id, "mode": inp.mode,
                     "message": f"All {doc_type} sections failed to generate. Please check your API key and try again.",
                     "data": {
+                        "generated_title": generated_title,
+                        "generated_outline": generated_outline,
                         "section_updates": [u.dict() for u in updates],
                         "selected_source_ids": selected_ids,
                         "deep_research_context_ids": dr_context_ids,
@@ -964,6 +984,8 @@ async def run_proposal_plan_stream(
                 yield emit("result", {
                     "status": "completed", "run_id": run_id, "mode": inp.mode,
                     "data": {
+                        "generated_title": generated_title,
+                        "generated_outline": generated_outline,
                         "section_updates": [u.dict() for u in updates],
                         "updated_section_ids": updated_ids,
                         "skipped_section_ids": skipped_ids,

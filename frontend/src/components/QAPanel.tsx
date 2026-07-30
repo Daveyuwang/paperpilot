@@ -1,7 +1,8 @@
-import React, { useRef, useEffect, useState, useCallback, useMemo } from "react";
-import { Send, Loader2, Square, RotateCcw, Pencil, BookOpen } from "lucide-react";
+import React, { useRef, useEffect, useState, useCallback } from "react";
+import { Send, Loader2, Square, RotateCcw, Pencil } from "lucide-react";
 import clsx from "clsx";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { api } from "@/api/client";
 import { useChatStore } from "@/store/chatStore";
 import { usePaperStore } from "@/store/paperStore";
 import { useAgendaStore } from "@/store/agendaStore";
@@ -18,7 +19,6 @@ import type {
 } from "@/types";
 import AnswerCard from "./AnswerCard";
 import { WelcomePanel } from "./WelcomePanel";
-import { DoneMarker } from "./StatusSteps";
 import { MarkdownRenderer } from "./shared/MarkdownRenderer";
 import { AgentActivity } from "./shared/AgentActivity";
 import { EditableUserMessage } from "./QAPanel/EditableUserMessage";
@@ -32,7 +32,6 @@ interface Props {
   onQueuedQuestionHandled?: (nonce: number) => void;
   forceConsole?: boolean;
   centered?: boolean;
-  fillInputRef?: React.MutableRefObject<((text: string) => void) | null>;
 }
 
 let lastAutoSubmittedQueuedNonce: number | null = null;
@@ -70,7 +69,6 @@ export function QAPanel({
   onQueuedQuestionHandled,
   forceConsole = false,
   centered = false,
-  fillInputRef,
 }: Props) {
   const { activePaper, activeSession, questions, newSession } = usePaperStore();
   const { getActiveWorkspace } = useWorkspaceStore();
@@ -79,8 +77,6 @@ export function QAPanel({
     isGenerating,
     statusText,
     suggestedQuestions,
-    currentMode,
-    currentScopeLabel,
     startAssistantMessage,
     startSilentAssistantMessage,
     setStreamingText,
@@ -97,8 +93,8 @@ export function QAPanel({
     setCurrentScopeLabel,
     markQuestionCovered,
     getConsoleSessionId,
+    setConsoleSessionId,
     switchToSession,
-    discardPartial,
     editingMessageId,
     setEditingMessageId,
     resubmitFrom,
@@ -112,16 +108,22 @@ export function QAPanel({
   const consoleSessionId = activeWs ? getConsoleSessionId(activeWs.id) : null;
   const effectiveSessionId = forceConsole
     ? consoleSessionId
-    : (activeSession?.id ?? consoleSessionId);
+    : (activeSession?.id ?? null);
 
   // Switch chatStore messages to the correct session when this panel mounts or session changes
   useEffect(() => {
     if (!effectiveSessionId) return;
-    const current = useChatStore.getState().activeSessionId;
+    const state = useChatStore.getState();
+    const current = state.activeSessionId;
     if (current !== effectiveSessionId) {
+      if (state.isGenerating) {
+        const unfinished = [...state.messages].reverse().find((message) => message.role === "assistant" && message.isStreaming);
+        if (unfinished) stopGeneration(unfinished.id);
+        else useChatStore.setState({ isGenerating: false, statusText: "", activeQuestionId: null });
+      }
       switchToSession(effectiveSessionId);
     }
-  }, [effectiveSessionId, switchToSession]);
+  }, [effectiveSessionId, stopGeneration, switchToSession]);
 
   const wid = activeWs?.id ?? "default";
   const activeDeliverable = getActiveDeliverable(wid);
@@ -133,6 +135,8 @@ export function QAPanel({
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [showSlowStatusHint, setShowSlowStatusHint] = useState(false);
   const [newChatConfirmOpen, setNewChatConfirmOpen] = useState(false);
+  const newChatDialogRef = useRef<HTMLDivElement>(null);
+  const newChatPreviousFocusRef = useRef<HTMLElement | null>(null);
   const pendingAssistantId = useRef<string | null>(null);
   const pendingCitationsRef = useRef<Citation[]>([]);
   const streamingTextRef = useRef<string>("");
@@ -140,24 +144,40 @@ export function QAPanel({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const slowHintTimerRef = useRef<number | null>(null);
   const stuckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const latestCitations = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant" && messages[i].citations.length > 0) {
-        return messages[i].citations;
-      }
-    }
-    return [] as Citation[];
-  }, [messages]);
+  const recoveringConsoleSessionRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (fillInputRef) {
-      fillInputRef.current = (text: string) => {
-        setInput(text);
-        textareaRef.current?.focus();
-      };
-    }
-  }, [fillInputRef]);
+    if (!newChatConfirmOpen) return;
+    newChatPreviousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frame = window.requestAnimationFrame(() => {
+      newChatDialogRef.current?.querySelector<HTMLElement>("button")?.focus();
+    });
+    const handleDialogKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setNewChatConfirmOpen(false);
+        return;
+      }
+      if (event.key !== "Tab" || !newChatDialogRef.current) return;
+      const controls = Array.from(newChatDialogRef.current.querySelectorAll<HTMLElement>("button:not([disabled])"));
+      if (controls.length === 0) return;
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", handleDialogKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", handleDialogKeyDown);
+      newChatPreviousFocusRef.current?.focus();
+    };
+  }, [newChatConfirmOpen]);
 
   const resetStuckTimer = useCallback(() => {
     if (stuckTimerRef.current) clearTimeout(stuckTimerRef.current);
@@ -182,8 +202,13 @@ export function QAPanel({
   useEffect(() => {
     return () => {
       if (stuckTimerRef.current) clearTimeout(stuckTimerRef.current);
+      const pendingId = pendingAssistantId.current;
+      if (pendingId) stopGeneration(pendingId);
+      pendingAssistantId.current = null;
+      pendingCitationsRef.current = [];
+      streamingTextRef.current = "";
     };
-  }, []);
+  }, [stopGeneration]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const handleWSMessage = useCallback((msg: WSMessage) => {
@@ -228,7 +253,6 @@ export function QAPanel({
         const citations = msg.content as Citation[];
         pendingCitationsRef.current = citations;
         setCitations(id, citations);
-        onHighlight(citations);
         break;
       }
 
@@ -256,7 +280,7 @@ export function QAPanel({
           markDoneByTrailId(activeQId);
           resolveUpNext();
         }
-        setTimeout(() => setShowSuggestions(true), 3800);
+        setTimeout(() => setShowSuggestions(true), 200);
         break;
       }
 
@@ -291,11 +315,66 @@ export function QAPanel({
     onHighlight, onNextQuestion, markDoneByTrailId, resolveUpNext,
   ]);
 
-  const { sendMessage, disconnect, reconnect } = useWebSocket(effectiveSessionId, handleWSMessage);
+  const { sendMessage, disconnect, reconnect, connectionState, closeInfo } = useWebSocket(effectiveSessionId, handleWSMessage);
+  const connectionReady = !!effectiveSessionId && connectionState === "open";
+
+  useEffect(() => {
+    if (!forceConsole || closeInfo?.code !== 4404 || !activeWs || !effectiveSessionId) return;
+    const recoveryKey = `${activeWs.id}:${effectiveSessionId}:${closeInfo.sequence}`;
+    if (recoveringConsoleSessionRef.current === recoveryKey) return;
+    recoveringConsoleSessionRef.current = recoveryKey;
+    let cancelled = false;
+
+    api.createWorkspaceSession(activeWs.id)
+      .then((session) => {
+        if (cancelled) return;
+        const state = useChatStore.getState();
+        if (state.getConsoleSessionId(activeWs.id) !== effectiveSessionId) return;
+        state.setConsoleSessionId(activeWs.id, session.id);
+        state.switchToSession(session.id, []);
+      })
+      .catch((error) => {
+        if (!cancelled) console.warn("[PaperPilot] console session recovery failed", error);
+      })
+      .finally(() => {
+        if (recoveringConsoleSessionRef.current === recoveryKey) {
+          recoveringConsoleSessionRef.current = null;
+        }
+      });
+
+    return () => { cancelled = true; };
+  }, [activeWs, closeInfo, effectiveSessionId, forceConsole, setConsoleSessionId, switchToSession]);
+
+  useEffect(() => {
+    if (!effectiveSessionId) return;
+    const state = useChatStore.getState();
+    if (state.activeSessionId !== effectiveSessionId || !state.isGenerating || pendingAssistantId.current) return;
+    const unfinished = [...state.messages].reverse().find((message) => message.role === "assistant" && message.isStreaming);
+    if (unfinished) stopGeneration(unfinished.id);
+    else useChatStore.setState({ isGenerating: false, statusText: "", activeQuestionId: null });
+  }, [effectiveSessionId, stopGeneration]);
+
+  useEffect(() => {
+    if (connectionState !== "closed" && connectionState !== "error") return;
+    const id = pendingAssistantId.current;
+    if (!id) return;
+    if (stuckTimerRef.current) clearTimeout(stuckTimerRef.current);
+    failMessage(id, "[Error]\nConnection lost before the answer completed. Retry when the connection is restored.");
+    pendingAssistantId.current = null;
+    pendingCitationsRef.current = [];
+    streamingTextRef.current = "";
+  }, [connectionState, failMessage]);
 
   const submit = useCallback((question: string, questionId?: string, opts?: { skipAddMessage?: boolean }) => {
-    if (!question.trim() || isGenerating) return;
+    if (!question.trim() || !connectionReady || isGenerating || (!forceConsole && activePaper && activePaper.status !== "ready")) return;
     console.debug("[PaperPilot] question_submit", { question: question.slice(0, 80), questionId });
+    const recentMessages = useChatStore.getState().messages
+      .filter((message) => message.content.trim() || message.streamingText?.trim() || message.answerJson?.direct_answer?.trim())
+      .slice(-8)
+      .map((message) => ({
+        role: message.role,
+        content: (message.answerJson?.direct_answer || message.streamingText || message.content).slice(0, 1600),
+      }));
     setShowSuggestions(false);
     setActiveQuestionId(questionId ?? null);
     if (!opts?.skipAddMessage) {
@@ -305,11 +384,19 @@ export function QAPanel({
     pendingAssistantId.current = assistantId;
     pendingCitationsRef.current = [];
     streamingTextRef.current = "";
+    resetStuckTimer();
 
-    const context = !activePaper && activeWs ? {
-      active_paper_id: null,
+    const context = forceConsole && activeWs ? {
+      active_paper_id: activePaper?.id ?? null,
+      active_paper_session_id: activeSession?.id ?? null,
       active_deliverable_id: activeDeliverable?.id ?? null,
       focused_section_id: focusedSectionId ?? null,
+      focused_section: focusedSection ? {
+        id: focusedSection.id,
+        title: focusedSection.title,
+        content: focusedSection.content,
+      } : null,
+      recent_messages: recentMessages,
       included_sources: getIncludedSources(wid).map(s => ({
         id: s.id,
         title: s.title,
@@ -330,7 +417,11 @@ export function QAPanel({
     sendMessage(question, questionId, undefined, context);
     setInput("");
     if (textareaRef.current) textareaRef.current.style.height = "auto";
-  }, [isGenerating, setActiveQuestionId, addUserMessage, startAssistantMessage, sendMessage, activePaper?.id, activeWs]);
+  }, [
+    isGenerating, forceConsole, setActiveQuestionId, addUserMessage, startAssistantMessage,
+    sendMessage, activePaper, activeWs, activeDeliverable, focusedSectionId, focusedSection,
+    getIncludedSources, wid, effectiveSessionId, activeSession?.id, connectionReady, resetStuckTimer,
+  ]);
 
   const handleStop = useCallback(() => {
     const id = pendingAssistantId.current;
@@ -339,7 +430,7 @@ export function QAPanel({
     reconnect();
     pendingAssistantId.current = null;
     streamingTextRef.current = "";
-    discardPartial(id);
+    stopGeneration(id);
     const msgs = useChatStore.getState().messages;
     const lastUser = [...msgs].reverse().find((m) => m.role === "user");
     if (lastUser) {
@@ -348,7 +439,7 @@ export function QAPanel({
     if (useChatStore.getState().suggestedQuestions.length > 0) {
       setTimeout(() => setShowSuggestions(true), 300);
     }
-  }, [disconnect, reconnect, discardPartial, setEditingMessageId]);
+  }, [disconnect, reconnect, stopGeneration, setEditingMessageId]);
 
   const handleOverrideAction = useCallback((actionType: string, originalQuestion: string) => {
     if (isGenerating) return;
@@ -375,7 +466,7 @@ export function QAPanel({
   });
 
   useEffect(() => {
-    if (!queuedQuestion || isGenerating) return;
+    if (!queuedQuestion || isGenerating || !connectionReady) return;
     if (lastAutoSubmittedQueuedNonce === queuedQuestion.nonce) {
       onQueuedQuestionHandled?.(queuedQuestion.nonce);
       return;
@@ -383,7 +474,7 @@ export function QAPanel({
     lastAutoSubmittedQueuedNonce = queuedQuestion.nonce;
     submit(queuedQuestion.question, queuedQuestion.id);
     onQueuedQuestionHandled?.(queuedQuestion.nonce);
-  }, [queuedQuestion, isGenerating, onQueuedQuestionHandled, submit]);
+  }, [queuedQuestion, isGenerating, connectionReady, onQueuedQuestionHandled, submit]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -423,14 +514,14 @@ export function QAPanel({
   const colClass = centered ? "max-w-[820px] mx-auto w-full" : "";
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full flex-col">
       {/* ── New chat header (paper mode only) ──────────────────────────────── */}
       {messages.length > 0 && activePaper && !forceConsole && (
         <div className="flex-shrink-0 px-4 py-1.5 border-b border-surface-100 flex items-center justify-end">
           <button
             onClick={() => setNewChatConfirmOpen(true)}
             className="text-[11px] text-surface-400 hover:text-surface-600 flex items-center gap-1 transition-colors"
-            title="Start a new chat session for this paper"
+            aria-label="Start a new paper chat"
           >
             <RotateCcw className="w-3 h-3" />
             New chat
@@ -439,7 +530,7 @@ export function QAPanel({
       )}
 
       {/* ── Scrollable messages ──────────────────────────────────────────── */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-5">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-5" role="log" aria-live="polite" aria-busy={isGenerating}>
         <div className={clsx("space-y-5", colClass)}>
 
         {messages.length === 0 && !forceConsole && activePaper?.status === "ready" && (
@@ -453,8 +544,8 @@ export function QAPanel({
         {messages.length === 0 && !forceConsole && activePaper && activePaper.status !== "ready" && (
           <div className="flex items-center justify-center h-full text-surface-500 text-sm text-center">
             <div>
-              <p className="font-medium">Ask anything about the paper</p>
-              <p className="text-xs mt-1 text-surface-400">Or follow the guided question trail</p>
+              <p className="font-medium">Preparing paper…</p>
+              <p className="text-xs mt-1 text-surface-400">Questions will be available when it’s ready.</p>
             </div>
           </div>
         )}
@@ -462,14 +553,19 @@ export function QAPanel({
         {messages.length === 0 && !forceConsole && !activePaper && (
           <div className="flex items-center justify-center h-full text-surface-500 text-sm text-center">
             <div>
-              <p className="font-medium">Paper QA</p>
-              <p className="text-xs mt-1 text-surface-400">Select a paper to start asking questions</p>
+              <p className="font-medium">Choose a paper</p>
+              <p className="text-xs mt-1 text-surface-400">Select one from the library.</p>
             </div>
           </div>
         )}
 
         {messages.length === 0 && forceConsole && (
-          <ConsoleEmptyState onFillInput={(text) => { setInput(text); textareaRef.current?.focus(); }} />
+          <ConsoleEmptyState
+            onFillInput={(text) => { setInput(text); textareaRef.current?.focus(); }}
+            sourceCount={includedSourceCount}
+            hasDraft={!!activeDeliverable}
+            hasActivePaper={!!activePaper}
+          />
         )}
 
         {messages.map((msg, idx) => {
@@ -518,8 +614,9 @@ export function QAPanel({
                     {!isGenerating && (
                       <button
                         onClick={() => setEditingMessageId(msg.id)}
-                        className="absolute -left-7 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity text-surface-400 hover:text-surface-600"
+                        className="absolute -left-7 top-1/2 -translate-y-1/2 text-surface-400 opacity-100 transition-opacity hover:text-surface-600 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
                         title="Edit message"
+                        aria-label="Edit message"
                       >
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
@@ -550,7 +647,7 @@ export function QAPanel({
 
                 return (
                   <FadeInUp animate={isCurrentlyStreaming && hasContent}>
-                    <div className="flex-1 min-w-0 pl-1 border-l-2 border-accent-200 py-2">
+                    <div className="min-w-0 flex-1 py-2">
 
                       {isCurrentlyStreaming && !msg.phase1Complete && (
                         <div className="flex items-center justify-between gap-2 mb-3">
@@ -581,7 +678,7 @@ export function QAPanel({
                           streamingText={msg.streamingText || undefined}
                           phase1Complete={msg.phase1Complete}
                           evidenceCount={msg.answerJson?.evidence?.length}
-                          showScopeBadge={!!msg.phase1Complete && !forceConsole}
+                          showScopeBadge={!!msg.phase1Complete}
                           isConsole={forceConsole}
                           onCitationClick={(page, section) => {
                             console.debug("[PaperPilot] citation_click", { page, section });
@@ -599,11 +696,13 @@ export function QAPanel({
                       )}
 
                       {!msg.answerJson && !msg.streamingText && msg.content.startsWith("[Error]") && (
-                        <div className="text-red-400 text-sm mt-2">
+                        <div className="mt-2 text-sm text-red-700" role="alert">
                           <p className="font-semibold mb-1">Something went wrong</p>
-                          <p className="text-xs text-red-300/70 font-mono whitespace-pre-wrap">
-                            {msg.content.replace("[Error]\n", "")}
-                          </p>
+                          <p className="text-xs">Try again or edit your question.</p>
+                          <details className="mt-2 text-xs text-surface-500">
+                            <summary className="cursor-pointer">Details</summary>
+                            <pre className="mt-1 whitespace-pre-wrap font-mono">{msg.content.replace("[Error]\n", "")}</pre>
+                          </details>
                         </div>
                       )}
 
@@ -611,7 +710,11 @@ export function QAPanel({
                         <MarkdownRenderer content={msg.content} />
                       )}
 
-                      {!isCurrentlyStreaming && msg.citations.length > 0 && (
+                      {msg.isPartial && (
+                        <p className="mt-2 text-xs font-medium text-surface-500">Stopped</p>
+                      )}
+
+                      {!isCurrentlyStreaming && msg.citations.length > 0 && (msg.answerJson?.evidence?.length ?? 0) === 0 && (
                         <div className="mt-3 pt-3 border-t border-surface-200 flex flex-wrap gap-1.5">
                           {msg.citations.map((c, i) => {
                             const sec = cleanCitationSection(c.section_title);
@@ -637,20 +740,7 @@ export function QAPanel({
           );
         })}
 
-        {/* Done confirmation — between last answer and suggestions, outside the bubble */}
-        {messages.some((m) => m.isDone) && (() => {
-          const doneMsg = messages.find((m) => m.isDone);
-          return (
-            <div className="pl-11">
-              <DoneMarker
-                mode={doneMsg?.answerJson?.answer_mode ?? currentMode}
-                answerJson={doneMsg?.answerJson}
-              />
-            </div>
-          );
-        })()}
-
-        {/* Suggested questions — fade+slide in after done confirmation fades */}
+        {/* Suggested questions appear after the answer settles. */}
         {showSuggestions && suggestedQuestions.length > 0 && messages.length > 0 && (
           <FadeInSlide>
             <SuggestionsBlock
@@ -664,43 +754,16 @@ export function QAPanel({
         </div>
       </div>
 
-      {/* ── Citation Bar ─────────────────────────────────────────────────── */}
-      {latestCitations.length > 0 && !isGenerating && (
-        <div className="flex-shrink-0 px-4 py-2 bg-accent-50/80 border-t border-accent-200/60">
-          <div className={clsx(colClass)}>
-            <div className="flex items-center gap-2">
-              <BookOpen className="w-3.5 h-3.5 text-accent-600 flex-shrink-0" />
-              <span className="text-[11px] font-semibold text-accent-700 flex-shrink-0">Sources</span>
-              <div className="flex gap-1.5 overflow-x-auto scrollbar-hide">
-                {latestCitations.map((c, i) => {
-                  const sec = cleanCitationSection(c.section_title);
-                  return (
-                    <button
-                      key={i}
-                      className="flex-shrink-0 text-[11px] font-medium text-accent-700 bg-white border border-accent-300 px-2 py-0.5 rounded-md hover:bg-accent-100 hover:border-accent-400 transition-colors shadow-sm"
-                      onClick={() => onHighlight([c])}
-                      title="Jump to in PDF"
-                    >
-                      {sec ? `${sec}` : `Ref ${i + 1}`}
-                      {c.page_number != null && ` · p.${c.page_number}`}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ── Composer ─────────────────────────────────────────────────────── */}
       <div className="flex-shrink-0 px-4 py-3 bg-white border-t border-surface-100">
         <div className={clsx(colClass)}>
           <div className={clsx(
-            "flex items-end gap-2 rounded-2xl border border-surface-200 bg-surface-50 px-3 py-2",
-            "focus-within:border-accent-400 focus-within:ring-1 focus-within:ring-accent-400 transition-all"
+            "flex items-end gap-2 rounded-xl border border-surface-300 bg-white px-3 py-2",
+            "focus-within:border-accent-400 focus-within:ring-2 focus-within:ring-accent-200 transition-colors"
           )}>
             <textarea
               ref={textareaRef}
+              aria-label={activePaper && !forceConsole ? "Ask this paper" : "Ask your workspace"}
               className={clsx(
                 "flex-1 bg-transparent text-sm text-surface-800 resize-none",
                 "focus:outline-none placeholder:text-surface-400 leading-snug",
@@ -708,7 +771,7 @@ export function QAPanel({
               )}
               style={{ minHeight: "36px", maxHeight: "120px" }}
               rows={1}
-              placeholder={activePaper && !forceConsole ? "Ask about this paper..." : "Ask about this workspace..."}
+              placeholder={!connectionReady ? "Connecting…" : activePaper && !forceConsole ? "Ask this paper…" : "Ask your workspace…"}
               value={input}
               onChange={handleTextareaInput}
               onKeyDown={(e) => {
@@ -717,25 +780,42 @@ export function QAPanel({
                   submit(input);
                 }
               }}
-              disabled={isGenerating}
+              disabled={!connectionReady || isGenerating || (!forceConsole && activePaper?.status !== "ready")}
               {...(forceConsole ? { "data-console-input": "" } : {})}
             />
             <button
               className={clsx(
                 "flex-shrink-0 rounded-xl transition-all duration-150",
-                "w-8 h-8 flex items-center justify-center focus:outline-none",
-                !input.trim() || isGenerating
+                "w-9 h-9 flex items-center justify-center",
+                !input.trim() || !connectionReady || isGenerating
                   ? "text-surface-300"
                   : "bg-accent-600 text-white hover:bg-accent-700 shadow-sm"
               )}
               onClick={() => submit(input)}
-              disabled={!input.trim() || isGenerating}
+              disabled={!input.trim() || !connectionReady || isGenerating}
+              aria-label={isGenerating ? "Generating response" : "Send message"}
             >
               {isGenerating
                 ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 : <Send className="w-3.5 h-3.5" />
               }
             </button>
+          </div>
+          <div className="mt-1.5 flex items-center gap-3 px-1 text-xs text-surface-400">
+            <span>
+              {!connectionReady
+                ? (connectionState === "closed" || connectionState === "error" ? "Connection unavailable" : "Connecting…")
+                : forceConsole
+                ? `${includedSourceCount} included ${includedSourceCount === 1 ? "source" : "sources"}`
+                : "Scoped to this paper"}
+              {forceConsole && focusedSection ? ` · Draft: ${focusedSection.title}` : ""}
+            </span>
+            {effectiveSessionId && (connectionState === "closed" || connectionState === "error") && (
+              <button className="text-xs font-medium text-accent-700 hover:text-accent-800" onClick={reconnect}>
+                Retry connection
+              </button>
+            )}
+            <span className="ml-auto hidden sm:inline">Enter to send · Shift + Enter for a new line</span>
           </div>
         </div>
       </div>
@@ -744,11 +824,11 @@ export function QAPanel({
       {newChatConfirmOpen && (
         <div className="absolute inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/20" onClick={() => setNewChatConfirmOpen(false)} />
-          <div className="relative w-[360px] max-w-[calc(100%-24px)] rounded-xl border border-surface-200 bg-white shadow-lg">
+          <div ref={newChatDialogRef} className="relative w-[360px] max-w-[calc(100%-24px)] rounded-xl border border-surface-200 bg-white shadow-md" role="alertdialog" aria-modal="true" aria-labelledby="new-chat-title">
             <div className="px-4 py-3 border-b border-surface-100">
-              <div className="text-sm font-semibold text-surface-800">Start a new chat?</div>
+              <div id="new-chat-title" className="text-sm font-semibold text-surface-800">Start a new chat?</div>
               <div className="text-xs text-surface-500 mt-1">
-                This will create a new session. Your previous chat is saved.
+                This clears the current conversation for this paper.
               </div>
             </div>
             <div className="px-4 py-2.5 flex items-center justify-end gap-2">
@@ -765,7 +845,7 @@ export function QAPanel({
                   await newSession();
                 }}
               >
-                New chat
+                Start new chat
               </button>
             </div>
           </div>
