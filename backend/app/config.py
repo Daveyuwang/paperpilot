@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-large-en-v1.5"
     embedding_dimension: int = 1024
     embedding_batch_size: int = 32
+    embedding_fallback_enabled: bool = True
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
     # Langfuse observability

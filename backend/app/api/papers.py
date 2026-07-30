@@ -189,7 +189,10 @@ async def get_pdf(
 
 
 @router.get("/{paper_id}/ingestion-progress")
-async def ingestion_progress(paper_id: str, guest_id: str = Depends(require_guest_id)):
+async def ingestion_progress(
+    paper_id: str,
+    guest_id: str = Depends(require_guest_id_for_download),
+):
     """SSE endpoint that streams ingestion stage and progress until the paper is ready or errored."""
     async def event_stream():
         while True:
