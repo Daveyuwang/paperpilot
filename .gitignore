@@ -45,9 +45,7 @@ docker-compose.override.yml
 .DS_Store
 Thumbs.db
 
-# Alembic
-backend/alembic/versions/*.py
-!backend/alembic/versions/.gitkeep
+# Alembic revisions are deployable source and must remain tracked.
 
 # Models cache
 *.bin

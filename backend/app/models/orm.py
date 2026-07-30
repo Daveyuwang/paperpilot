@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from sqlalchemy import (
     String, Text, Integer, Float, Boolean, DateTime, ForeignKey,
-    Enum as SAEnum, JSON,
+    Enum as SAEnum, JSON, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -32,6 +32,24 @@ class WorkflowRunType(str, enum.Enum):
     deliverable_draft = "deliverable_draft"
 
 
+# ── Research Director lifecycle ───────────────────────────────────
+
+
+class ResearchArtifactStatus(str, enum.Enum):
+    """Lifecycle states for plans and their handoff artifacts.
+
+    Execution and verification are deliberately outside this lifecycle: the
+    Research Director can prepare and hand off work, but cannot claim that an
+    external implementation or experiment has run successfully.
+    """
+
+    draft = "draft"
+    reviewed = "reviewed"
+    approved = "approved"
+    superseded = "superseded"
+    handed_off = "handed_off"
+
+
 # ── Ingestion Stage enum ─────────────────────────────────────────────────
 
 
@@ -57,6 +75,15 @@ class Workspace(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     papers: Mapped[list["Paper"]] = relationship(back_populates="workspace")
+    research_projects: Mapped[list["ResearchProject"]] = relationship(
+        back_populates="workspace", cascade="all, delete-orphan"
+    )
+    research_idempotency_receipts: Mapped[list["ResearchIdempotencyReceipt"]] = (
+        relationship(
+            back_populates="workspace",
+            cascade="all, delete-orphan",
+        )
+    )
 
 
 class PaperStatus(str, enum.Enum):
@@ -220,6 +247,232 @@ class WorkflowRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ResearchProject(Base):
+    """Top-level Research Director project owned by a workspace guest."""
+
+    __tablename__ = "research_projects"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    guest_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(512))
+    objective: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[ResearchArtifactStatus] = mapped_column(
+        SAEnum(ResearchArtifactStatus, name="research_artifact_status"),
+        default=ResearchArtifactStatus.draft,
+    )
+    # Research contract, scope, constraints, and other project-level artifacts.
+    content: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    workspace: Mapped["Workspace"] = relationship(back_populates="research_projects")
+    plan_versions: Mapped[list["ResearchPlanVersion"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+        order_by="ResearchPlanVersion.version_number",
+    )
+    reviews: Mapped[list["ResearchPlanReview"]] = relationship(
+        back_populates="project", order_by="ResearchPlanReview.created_at"
+    )
+    handoff_bundles: Mapped[list["ResearchHandoffBundle"]] = relationship(
+        back_populates="project", order_by="ResearchHandoffBundle.version_number"
+    )
+
+
+class ResearchPlanVersion(Base):
+    """Immutable-by-convention snapshot of a research implementation plan."""
+
+    __tablename__ = "research_plan_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "research_project_id",
+            "version_number",
+            name="uq_research_plan_versions_project_version",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    guest_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    research_project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("research_projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[ResearchArtifactStatus] = mapped_column(
+        SAEnum(ResearchArtifactStatus, name="research_artifact_status"),
+        default=ResearchArtifactStatus.draft,
+    )
+    # Full plan snapshot, including hypotheses, methods, work packages, and risks.
+    content: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    project: Mapped["ResearchProject"] = relationship(back_populates="plan_versions")
+    reviews: Mapped[list["ResearchPlanReview"]] = relationship(
+        back_populates="plan_version",
+        cascade="all, delete-orphan",
+        order_by="ResearchPlanReview.review_round",
+    )
+    handoff_bundles: Mapped[list["ResearchHandoffBundle"]] = relationship(
+        back_populates="plan_version",
+        cascade="all, delete-orphan",
+        order_by="ResearchHandoffBundle.version_number",
+    )
+
+
+class ResearchPlanReview(Base):
+    """Independent, structured review of one plan version."""
+
+    __tablename__ = "research_plan_reviews"
+    __table_args__ = (
+        UniqueConstraint(
+            "research_plan_version_id",
+            "review_round",
+            name="uq_research_plan_reviews_version_round",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    guest_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    research_project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("research_projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    research_plan_version_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("research_plan_versions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    review_round: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[ResearchArtifactStatus] = mapped_column(
+        SAEnum(ResearchArtifactStatus, name="research_artifact_status"),
+        default=ResearchArtifactStatus.draft,
+    )
+    # Review rubric, findings, issues, decisions, and accepted risks.
+    review: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    project: Mapped["ResearchProject"] = relationship(back_populates="reviews")
+    plan_version: Mapped["ResearchPlanVersion"] = relationship(back_populates="reviews")
+
+
+class ResearchHandoffBundle(Base):
+    """Approved research package prepared for an external executor."""
+
+    __tablename__ = "research_handoff_bundles"
+    __table_args__ = (
+        UniqueConstraint(
+            "research_project_id",
+            "version_number",
+            name="uq_research_handoff_bundles_project_version",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    guest_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    research_project_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("research_projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    research_plan_version_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("research_plan_versions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[ResearchArtifactStatus] = mapped_column(
+        SAEnum(ResearchArtifactStatus, name="research_artifact_status"),
+        default=ResearchArtifactStatus.draft,
+    )
+    # Implementation-ready work packages, acceptance criteria, and open risks.
+    content: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    project: Mapped["ResearchProject"] = relationship(back_populates="handoff_bundles")
+    plan_version: Mapped["ResearchPlanVersion"] = relationship(
+        back_populates="handoff_bundles"
+    )
+
+
+class ResearchIdempotencyReceipt(Base):
+    """Durable claim and frozen response for a Research Director mutation."""
+
+    __tablename__ = "research_idempotency_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "guest_id",
+            "idempotency_key",
+            name="uq_research_idempotency_receipts_scope_key",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    guest_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    operation: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="in_progress",
+    )
+    owner_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+    response_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    workspace: Mapped["Workspace"] = relationship(
+        back_populates="research_idempotency_receipts"
+    )
 
 
 class UserPreferences(Base):

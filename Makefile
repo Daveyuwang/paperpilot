@@ -23,8 +23,10 @@ up:
 
 setup:
 	cp -n .env.example .env 2>/dev/null || true
-	docker compose up -d --build
-	$(MAKE) migrate
+	docker compose build
+	docker compose up -d postgres redis qdrant
+	docker compose run --rm backend python -m app.db.migrate
+	docker compose up -d
 
 down:
 	docker compose down

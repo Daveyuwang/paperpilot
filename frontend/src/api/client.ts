@@ -7,6 +7,34 @@ import { getGuestId } from "@/store/guestStore";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
+export class ApiRequestError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly responseText: string,
+    public readonly retryAfter: string | null = null,
+  ) {
+    super(`API ${status}: ${responseText}`);
+    this.name = "ApiRequestError";
+  }
+}
+
+type WorkspaceResponse = {
+  id: string;
+  title: string;
+  objective: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type WorkspaceSyncTarget = Pick<WorkspaceResponse, "id" | "title"> & {
+  objective: string;
+};
+
+type WorkspaceSyncResult = {
+  workspace: WorkspaceResponse;
+  consoleSession: Session | null;
+};
+
 async function healthCheck(): Promise<boolean> {
   try {
     const ctrl = new AbortController();
@@ -22,7 +50,7 @@ async function healthCheck(): Promise<boolean> {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
@@ -33,7 +61,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`API ${res.status}: ${text}`);
+    throw new ApiRequestError(res.status, text, res.headers.get("Retry-After"));
   }
   // 204 No Content — nothing to parse
   if (res.status === 204 || res.headers.get("content-length") === "0") {
@@ -42,19 +70,85 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+const request = apiRequest;
+
+const workspaceSyncQueue = new Map<
+  string,
+  { fingerprint: string; promise: Promise<WorkspaceSyncResult> }
+>();
+
+async function syncWorkspaceOnServer(
+  target: WorkspaceSyncTarget,
+  carriedSession: Session | null,
+): Promise<WorkspaceSyncResult> {
+  let workspace: WorkspaceResponse;
+  let consoleSession = carriedSession;
+
+  try {
+    workspace = await request<WorkspaceResponse>(`/api/workspaces/${encodeURIComponent(target.id)}`);
+  } catch (error) {
+    if (!(error instanceof ApiRequestError) || error.status !== 404) throw error;
+
+    // The console-session endpoint is the existing compatibility bridge for
+    // client-generated workspace IDs. It creates the exact ID when missing.
+    consoleSession = await request<Session>("/api/sessions/workspace/console", {
+      method: "POST",
+      body: JSON.stringify({ workspace_id: target.id }),
+    });
+    workspace = await request<WorkspaceResponse>(`/api/workspaces/${encodeURIComponent(target.id)}`);
+  }
+
+  if (workspace.title !== target.title || (workspace.objective ?? "") !== target.objective) {
+    workspace = await request<WorkspaceResponse>(`/api/workspaces/${encodeURIComponent(target.id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ title: target.title, objective: target.objective }),
+    });
+  }
+
+  return { workspace, consoleSession };
+}
+
+function ensureWorkspace(target: WorkspaceSyncTarget): Promise<WorkspaceSyncResult> {
+  const queueKey = `${getGuestId()}:${target.id}`;
+  const fingerprint = JSON.stringify([target.title, target.objective]);
+  const previous = workspaceSyncQueue.get(queueKey);
+  if (previous?.fingerprint === fingerprint) return previous.promise;
+
+  // Serialize metadata changes for one workspace so an older response cannot
+  // overwrite a newer rename/objective update. Identical concurrent calls share
+  // the same promise (including React Strict Mode's repeated mount effects).
+  const promise = (async () => {
+    const previousResult = previous
+      ? await previous.promise.catch(() => null)
+      : null;
+    return syncWorkspaceOnServer(target, previousResult?.consoleSession ?? null);
+  })();
+
+  workspaceSyncQueue.set(queueKey, { fingerprint, promise });
+  const cleanup = () => {
+    if (workspaceSyncQueue.get(queueKey)?.promise === promise) {
+      workspaceSyncQueue.delete(queueKey);
+    }
+  };
+  void promise.then(cleanup, cleanup);
+  return promise;
+}
+
 export const api = {
   healthCheck,
 
   // Workspaces
-  listWorkspaces(): Promise<{ id: string; title: string; objective: string | null; created_at: string; updated_at: string }[]> {
+  listWorkspaces(): Promise<WorkspaceResponse[]> {
     return request("/api/workspaces/");
   },
 
-  createWorkspace(title: string, objective?: string): Promise<{ id: string; title: string; objective: string | null; created_at: string; updated_at: string }> {
+  createWorkspace(title: string, objective?: string): Promise<WorkspaceResponse> {
     return request("/api/workspaces/", { method: "POST", body: JSON.stringify({ title, objective }) });
   },
 
-  updateWorkspace(id: string, data: { title?: string; objective?: string }): Promise<{ id: string; title: string; objective: string | null; created_at: string; updated_at: string }> {
+  ensureWorkspace,
+
+  updateWorkspace(id: string, data: { title?: string; objective?: string | null }): Promise<WorkspaceResponse> {
     return request(`/api/workspaces/${id}`, { method: "PUT", body: JSON.stringify(data) });
   },
 
