@@ -18,6 +18,7 @@ volumes:
   model_cache:       # shared HuggingFace cache between backend & worker
   upload_data:
   langfuse_data:
+  skills_cache:
 
 services:
   # ── Infrastructure ─────────────────────────────────────────────────────
@@ -114,6 +115,7 @@ services:
       - ./backend/app:/app/app
       - upload_data:/app/uploads
       - model_cache:/root/.cache/huggingface
+      - skills_cache:/app/.runtime/skills
     ports:
       - "8000:8000"
     networks: [paperpilot_net]

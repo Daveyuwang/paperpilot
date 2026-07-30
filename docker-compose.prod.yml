@@ -11,6 +11,7 @@ services:
       # No source mounts in production — image is self-contained
       - upload_data:/app/uploads
       - model_cache:/root/.cache/huggingface
+      - skills_cache:/app/.runtime/skills
 
   worker:
     build:

@@ -11,6 +11,7 @@ from app.deep_research.llm_factory import make_llm
 from app.deep_research.models import ResearchReport, ReportSection, SourceRef
 from app.deep_research.prompts import SYNTHESIZE_USER
 from app.deep_research.state import DeepResearchState
+from app.deep_research.skill_context import skill_aware_prompts
 
 logger = structlog.get_logger()
 
@@ -135,15 +136,18 @@ async def synthesize_node(state: DeepResearchState) -> dict:
 
     llm = make_llm(state, max_tokens=3000, temperature=0.3)
     outline_llm = llm.with_structured_output(ReportOutline)
+    outline_system, outline_user = skill_aware_prompts(
+        state,
+        OUTLINE_SYSTEM,
+        SYNTHESIZE_USER.format(topic=topic, sub_reports_block=sub_reports_block),
+    )
 
     try:
         outline: ReportOutline = await _invoke_outline(
             outline_llm,
             [
-                {"role": "system", "content": OUTLINE_SYSTEM},
-                {"role": "user", "content": SYNTHESIZE_USER.format(
-                    topic=topic, sub_reports_block=sub_reports_block,
-                )},
+                {"role": "system", "content": outline_system},
+                {"role": "user", "content": outline_user},
             ],
         )
     except Exception as exc:

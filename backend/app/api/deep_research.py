@@ -23,6 +23,8 @@ from app.llm.client import LLMClient
 from app.workflow_state import create_workflow_run, update_workflow_stage, complete_workflow_run
 from app.models.orm import WorkflowRunType, WorkflowRunStatus
 from app.tracing import create_trace, get_langfuse_callback_handler
+from app.skills.service import get_skill_service
+from app.deep_research.skill_context import skill_aware_prompts
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -240,6 +242,13 @@ def _build_initial_state(req: DeepResearchRequest, api_key: str, base_url: str |
         topic += f" (must include: {req.input.must_include.strip()})"
 
     user_sources = [s.title for s in req.workspace_sources if s.label != "discarded"]
+    skill_context = get_skill_service().select(topic, flow="deep_research")
+    if skill_context.names:
+        logger.info(
+            "deep_research_skills_selected",
+            skill_names=list(skill_context.names),
+            skill_revision=skill_context.revision,
+        )
 
     # If pre_plan provided, convert to SubQuestion models
     pre_sub_questions: list[SubQuestion] = []
@@ -265,6 +274,8 @@ def _build_initial_state(req: DeepResearchRequest, api_key: str, base_url: str |
         api_key=api_key,
         llm_base_url=base_url,
         llm_model=model,
+        skill_names=list(skill_context.names),
+        skill_revision=skill_context.revision,
         sub_questions=pre_sub_questions,
         sub_reports=[],
         failed_queries=[],
@@ -353,6 +364,7 @@ async def generate_plan(
         max_questions=max_questions,
         sources_block=sources_block,
     )
+    skill_context = get_skill_service().select(topic, flow="deep_research")
 
     # Build a minimal state dict for make_dr_llm
     fake_state: DeepResearchState = {
@@ -363,12 +375,15 @@ async def generate_plan(
         "api_key": llm_client.resolved.api_key,
         "llm_base_url": llm_client.resolved.base_url,
         "llm_model": llm_client.resolved.model,
+        "skill_names": list(skill_context.names),
+        "skill_revision": skill_context.revision,
         "sub_questions": [],
         "sub_reports": [],
         "failed_queries": [],
         "replan_count": 0,
         "final_report": None,
     }
+    system, user_msg = skill_aware_prompts(fake_state, system, user_msg)
 
     llm = make_dr_llm(fake_state, max_tokens=2000, temperature=0.3)
     structured_llm = llm.with_structured_output(Plan)

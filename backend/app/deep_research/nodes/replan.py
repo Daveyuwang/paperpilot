@@ -7,6 +7,7 @@ from app.deep_research.llm_factory import make_llm
 from app.deep_research.models import Plan
 from app.deep_research.prompts import REPLAN_SYSTEM, REPLAN_USER
 from app.deep_research.state import DeepResearchState
+from app.deep_research.skill_context import skill_aware_prompts
 
 logger = structlog.get_logger()
 
@@ -59,6 +60,7 @@ async def replan_node(state: DeepResearchState) -> dict:
         low_confidence_reports=low_reports_text or "(none)",
         failed_queries=failed_text,
     )
+    system, user_msg = skill_aware_prompts(state, system, user_msg)
 
     llm = make_llm(state, max_tokens=1500, temperature=0.3)
     structured_llm = llm.with_structured_output(Plan)

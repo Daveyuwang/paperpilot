@@ -10,6 +10,8 @@ import structlog
 from typing import AsyncGenerator
 
 from app.agents.console_intent import classify_console_intent, console_intent_to_scope_label
+from app.skills.prompting import attach_skill_reference, with_skill_policy
+from app.skills.service import get_skill_service
 
 logger = structlog.get_logger()
 
@@ -128,10 +130,26 @@ async def run_console_turn(
         yield {"type": "error", "content": f"LLM not configured: {str(exc)}"}
         return
 
+    skill_context = get_skill_service().select(question, flow="console")
+    skill_reference = get_skill_service().render(
+        skill_context.names,
+        revision=skill_context.revision,
+        max_chars=8_000,
+    )
     system_prompt = _build_system_prompt(intent, ctx)
+    user_prompt = question
+    if skill_reference:
+        system_prompt = with_skill_policy(system_prompt)
+        user_prompt = attach_skill_reference(question, skill_reference)
+    if skill_context.names:
+        logger.info(
+            "console_skills_selected",
+            skill_names=list(skill_context.names),
+            skill_revision=skill_context.revision,
+        )
     yield {"type": "status", "content": _status_for_intent(intent)}
 
-    async for msg in _stream_llm_answer(llm, system_prompt, question, intent, scope_label):
+    async for msg in _stream_llm_answer(llm, system_prompt, user_prompt, intent, scope_label):
         yield msg
 
 

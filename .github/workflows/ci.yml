@@ -66,4 +66,4 @@ jobs:
         run: python -c "from app.retrieval.qdrant_client import get_client; print(type(get_client()).__name__)"
 
       - name: Run backend unit tests
-        run: pytest backend/app/tests/test_health.py backend/tests/test_intent.py -q
+        run: pytest backend/app/tests/test_health.py backend/tests/test_intent.py backend/tests/skills -q

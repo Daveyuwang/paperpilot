@@ -1,5 +1,6 @@
 from functools import lru_cache
-from pydantic import field_validator
+
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -42,6 +43,20 @@ class Settings(BaseSettings):
     web_search_enabled: bool = True
     inline_ingestion: bool = False
 
+    # Agent skills (third-party SKILL.md files are advisory prompt context only)
+    agent_skills_enabled: bool = True
+    agent_skills_repo_url: str = "https://github.com/Orchestra-Research/AI-research-SKILLs.git"
+    agent_skills_repo_ref: str = "main"
+    agent_skills_cache_dir: str = ".runtime/skills"
+    agent_skills_refresh_seconds: int = 86400
+    agent_skills_clone_timeout_seconds: int = 90
+    agent_skills_max_count: int = 200
+    agent_skills_max_file_bytes: int = 200_000
+    agent_skills_max_selected: int = 2
+    agent_skills_max_prompt_chars: int = 12_000
+    agent_skills_min_score: float = 6.0
+    agent_skills_blocked_names: str = "autoresearch"
+
     # External APIs
     semantic_scholar_api_key: str = ""
     tavily_api_key: str = ""
@@ -79,9 +94,39 @@ class Settings(BaseSettings):
             return value.replace("postgres://", "postgresql+asyncpg://", 1)
         return value
 
+    @model_validator(mode="after")
+    def validate_agent_skill_settings(self):
+        """Validate loader bounds only when the feature is enabled."""
+
+        if not self.agent_skills_enabled:
+            return self
+        positive_fields = {
+            "agent_skills_refresh_seconds": self.agent_skills_refresh_seconds,
+            "agent_skills_clone_timeout_seconds": self.agent_skills_clone_timeout_seconds,
+            "agent_skills_max_count": self.agent_skills_max_count,
+            "agent_skills_max_file_bytes": self.agent_skills_max_file_bytes,
+            "agent_skills_max_selected": self.agent_skills_max_selected,
+        }
+        invalid = [name for name, value in positive_fields.items() if value <= 0]
+        if invalid:
+            raise ValueError(f"agent skill settings must be positive: {', '.join(invalid)}")
+        if self.agent_skills_max_prompt_chars < 1_024:
+            raise ValueError("agent_skills_max_prompt_chars must be at least 1024")
+        if self.agent_skills_min_score < 0:
+            raise ValueError("agent_skills_min_score cannot be negative")
+        return self
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",")]
+
+    @property
+    def agent_skills_blocked_names_list(self) -> list[str]:
+        return [
+            name.strip()
+            for name in self.agent_skills_blocked_names.split(",")
+            if name.strip()
+        ]
 
 
 @lru_cache
