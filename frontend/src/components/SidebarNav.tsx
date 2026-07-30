@@ -4,6 +4,7 @@ import {
   MessageSquare,
   BookOpen,
   FlaskConical,
+  Compass,
   FileText,
   Settings,
 } from "lucide-react";
@@ -15,6 +16,7 @@ const NAV_ITEMS: { id: NavItem; label: string; icon: React.ElementType }[] = [
   { id: "console",       label: "Console",       icon: MessageSquare },
   { id: "reader",        label: "Reader",        icon: BookOpen },
   { id: "deep-research", label: "Deep Research", icon: FlaskConical },
+  { id: "research-director", label: "Research Director", icon: Compass },
   { id: "proposal",      label: "Proposal",      icon: FileText },
 ];
 

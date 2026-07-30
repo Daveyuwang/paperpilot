@@ -2,12 +2,30 @@
 # Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 services:
+  postgres:
+    ports: !reset []
+
+  langfuse-db:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  qdrant:
+    ports: !reset []
+
   backend:
     build:
       target: production
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-paperpilot}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-paperpilot}
+      - POSTGRES_DB=${POSTGRES_DB:-paperpilot}
+      - ENVIRONMENT=production
+    command: sh -c "python -m app.db.migrate && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
+    ports: !reset []
     restart: always
-    volumes:
+    volumes: !override
       # No source mounts in production — image is self-contained
       - upload_data:/app/uploads
       - model_cache:/root/.cache/huggingface
@@ -15,17 +33,17 @@ services:
   worker:
     build:
       target: production
+    command: sh -c "python -m app.db.migrate && exec celery -A app.ingestion.celery_app worker --loglevel=info --concurrency=2 -Q ingestion,default"
     restart: always
-    volumes:
+    volumes: !override
       - upload_data:/app/uploads
       - model_cache:/root/.cache/huggingface
 
   frontend:
     build:
       target: production
-    ports:
-      - "80:80"
-    volumes: []   # override the dev source mounts
+    ports: !reset []
+    volumes: !reset []
 
   # Nginx reverse proxy (only needed for self-hosted prod; Render handles routing)
   nginx:
@@ -38,3 +56,4 @@ services:
       - backend
       - frontend
     restart: always
+    networks: [paperpilot_net]

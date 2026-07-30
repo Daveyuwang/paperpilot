@@ -11,7 +11,21 @@ from app.rate_limit import limiter
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from app.db.postgres import AsyncSessionLocal, init_db
-from app.api import papers, sessions, concepts, ws, settings as settings_api, sources, drafts, deep_research, proposal_plan, workspaces, preferences, workflow_runs
+from app.api import (
+    concepts,
+    deep_research,
+    drafts,
+    papers,
+    preferences,
+    proposal_plan,
+    research_director,
+    sessions,
+    settings as settings_api,
+    sources,
+    workflow_runs,
+    workspaces,
+    ws,
+)
 from app.ingestion.tasks import run_ingestion_job
 from app.models.orm import Paper, PaperStatus
 from app.tracing import flush_tracing
@@ -47,7 +61,10 @@ async def _resume_processing_papers() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("startup", env=settings.environment)
-    await init_db()
+    if settings.environment.lower() in {"development", "test"}:
+        await init_db()
+    else:
+        logger.info("schema_init_skipped", reason="production_uses_alembic")
     await _resume_processing_papers()
     yield
     flush_tracing()
@@ -66,6 +83,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Retry-After"],
 )
 
 app.state.limiter = limiter
@@ -80,6 +98,11 @@ app.include_router(sources.router, prefix="/api/sources", tags=["sources"])
 app.include_router(drafts.router, prefix="/api/drafts", tags=["drafts"])
 app.include_router(deep_research.router, prefix="/api/deep-research", tags=["deep-research"])
 app.include_router(proposal_plan.router, prefix="/api/proposal-plan", tags=["proposal-plan"])
+app.include_router(
+    research_director.router,
+    prefix="/api/research-director",
+    tags=["research-director"],
+)
 app.include_router(workflow_runs.router, prefix="/api/workflow-runs", tags=["workflow-runs"])
 app.include_router(preferences.router, prefix="/api/preferences", tags=["preferences"])
 app.include_router(ws.router, prefix="/ws", tags=["websocket"])

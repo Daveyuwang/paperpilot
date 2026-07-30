@@ -6,8 +6,9 @@ import { useSourceStore } from "@/store/sourceStore";
 import { useChatStore } from "@/store/chatStore";
 import { useDeepResearchStore } from "@/store/deepResearchStore";
 import { useProposalPlanStore } from "@/store/proposalPlanStore";
+import { useResearchDirectorStore } from "@/store/researchDirectorStore";
 import type { Citation } from "@/types";
-import { api } from "@/api/client";
+import { api, ApiRequestError } from "@/api/client";
 
 import { SidebarNav } from "@/components/SidebarNav";
 import { WorkspaceHeader } from "@/components/WorkspaceHeader";
@@ -20,6 +21,7 @@ import { PaperList } from "@/components/PaperList";
 import { SettingsModal } from "@/components/SettingsModal";
 import { DeepResearchView } from "@/components/DeepResearchView";
 import { ProposalPlanView } from "@/components/ProposalPlanView";
+import { ResearchDirectorView } from "@/components/ResearchDirectorView";
 import clsx from "clsx";
 import { WifiOff, RefreshCw } from "lucide-react";
 
@@ -29,7 +31,8 @@ const IDLE_STATUSES = ["idle", "needs_clarification", "completed", "blocked", "f
 function syncBeforeUnload() {
   const drRunning = !IDLE_STATUSES.includes(useDeepResearchStore.getState().status);
   const ppRunning = !IDLE_STATUSES.includes(useProposalPlanStore.getState().status);
-  window.onbeforeunload = (drRunning || ppRunning) ? (e: BeforeUnloadEvent) => { e.preventDefault(); return ""; } : null;
+  const directorRunning = useResearchDirectorStore.getState().requestStatus !== "idle";
+  window.onbeforeunload = (drRunning || ppRunning || directorRunning) ? (e: BeforeUnloadEvent) => { e.preventDefault(); return ""; } : null;
 }
 
 export default function App() {
@@ -46,6 +49,12 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [backendDown, setBackendDown] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [workspaceSyncAttempt, setWorkspaceSyncAttempt] = useState(0);
+  const [workspaceSync, setWorkspaceSync] = useState<{
+    workspaceId: string | null;
+    status: "idle" | "syncing" | "ready" | "error";
+    error: string | null;
+  }>({ workspaceId: null, status: "idle", error: null });
   const healthRetryRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const activeWs = getActiveWorkspace();
@@ -65,6 +74,7 @@ export default function App() {
     if (prevWsId.current && prevWsId.current !== activeWs.id) {
       useDeepResearchStore.getState().reset();
       useProposalPlanStore.getState().reset();
+      useResearchDirectorStore.getState().reset();
       useChatStore.getState().initSession();
       useAgendaStore.getState().clearVolatile();
     }
@@ -156,29 +166,86 @@ export default function App() {
     if (papers.length > 0 && activeWs?.id) syncUploads(activeWs.id, papers);
   }, [papers, activeWs?.id, syncUploads]);
 
-  // Bootstrap workspace console session (always, regardless of paper selection)
+  // Synchronize the client-owned workspace ID before mounting workflows that
+  // require a persisted server Workspace. The console-session endpoint remains
+  // the compatibility bridge for existing local workspaces.
   const { setConsoleSessionId, getConsoleSessionId } = useChatStore();
   useEffect(() => {
-    if (!activeWs?.id) return;
-    const existing = getConsoleSessionId(activeWs.id);
-    if (existing) return;
+    if (!activeWs?.id) {
+      setWorkspaceSync({ workspaceId: null, status: "idle", error: null });
+      return;
+    }
+
+    const snapshot = {
+      id: activeWs.id,
+      title: activeWs.title,
+      objective: activeWs.objective,
+    };
 
     let cancelled = false;
-    api.createWorkspaceSession(activeWs.id).then((session) => {
-      if (!cancelled) {
-        setConsoleSessionId(activeWs.id, session.id);
-      }
-    }).catch((err) => {
-      console.warn("[PaperPilot] console session creation failed", err);
-    });
-    return () => { cancelled = true; };
-  }, [activeWs?.id, setConsoleSessionId, getConsoleSessionId]);
+    setWorkspaceSync({ workspaceId: snapshot.id, status: "syncing", error: null });
 
-  // Warn before page unload if a DR or PP run is active
+    const isCurrent = () => {
+      const current = useWorkspaceStore.getState().getActiveWorkspace();
+      return !cancelled
+        && current?.id === snapshot.id
+        && current.title === snapshot.title
+        && current.objective === snapshot.objective;
+    };
+
+    async function synchronizeWorkspace() {
+      try {
+        const result = await api.ensureWorkspace(snapshot);
+        if (!isCurrent()) return;
+
+        if (result.consoleSession) {
+          setConsoleSessionId(snapshot.id, result.consoleSession.id);
+        } else {
+          const cachedSessionId = getConsoleSessionId(snapshot.id);
+          if (cachedSessionId) {
+            try {
+              await api.getSession(cachedSessionId);
+            } catch (error) {
+              if (!(error instanceof ApiRequestError) || error.status !== 404) throw error;
+              const session = await api.createWorkspaceSession(snapshot.id);
+              if (!isCurrent()) return;
+              setConsoleSessionId(snapshot.id, session.id);
+            }
+          } else {
+            const session = await api.createWorkspaceSession(snapshot.id);
+            if (!isCurrent()) return;
+            setConsoleSessionId(snapshot.id, session.id);
+          }
+        }
+
+        if (isCurrent()) {
+          setWorkspaceSync({ workspaceId: snapshot.id, status: "ready", error: null });
+        }
+      } catch (error) {
+        if (!isCurrent()) return;
+        const message = error instanceof Error ? error.message : "Workspace synchronization failed.";
+        console.warn("[PaperPilot] workspace synchronization failed", error);
+        setWorkspaceSync({ workspaceId: snapshot.id, status: "error", error: message });
+      }
+    }
+
+    void synchronizeWorkspace();
+    return () => { cancelled = true; };
+  }, [
+    activeWs?.id,
+    activeWs?.title,
+    activeWs?.objective,
+    workspaceSyncAttempt,
+    setConsoleSessionId,
+    getConsoleSessionId,
+  ]);
+
+  // Warn before page unload if a research workflow request is active
   useEffect(() => {
     const unsubs = [
       useDeepResearchStore.subscribe(syncBeforeUnload),
       useProposalPlanStore.subscribe(syncBeforeUnload),
+      useResearchDirectorStore.subscribe(syncBeforeUnload),
     ];
     syncBeforeUnload();
     return () => { unsubs.forEach((u) => u()); window.onbeforeunload = null; };
@@ -233,6 +300,9 @@ export default function App() {
   }, [setSelectedNav]);
 
   const bboxes = highlights.map((c) => c.bbox).filter(Boolean) as NonNullable<Citation["bbox"]>[];
+  const activeWorkspaceSyncStatus = workspaceSync.workspaceId === activeWs?.id
+    ? workspaceSync.status
+    : "idle";
 
   return (
     <>
@@ -308,6 +378,36 @@ export default function App() {
                   />
                 )}
                 {selectedNav === "deep-research" && <DeepResearchView />}
+                {selectedNav === "research-director" && (
+                  activeWorkspaceSyncStatus === "ready"
+                    ? <ResearchDirectorView />
+                    : (
+                      <div className="h-full flex items-center justify-center px-6 bg-surface-50">
+                        <div className="max-w-md text-center">
+                          <h2 className="heading-serif text-base text-surface-800">
+                            {activeWorkspaceSyncStatus === "error"
+                              ? "Workspace is not ready"
+                              : "Preparing Research Director"}
+                          </h2>
+                          <p className="mt-2 text-xs leading-relaxed text-surface-500">
+                            {activeWorkspaceSyncStatus === "error"
+                              ? workspaceSync.error
+                              : "Synchronizing this workspace with the PaperPilot server…"}
+                          </p>
+                          {activeWorkspaceSyncStatus === "error" && (
+                            <button
+                              type="button"
+                              className="btn-primary mt-4 inline-flex items-center gap-1.5 px-3 py-2 text-xs"
+                              onClick={() => setWorkspaceSyncAttempt((attempt) => attempt + 1)}
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              Retry
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                )}
                 {selectedNav === "proposal" && <ProposalPlanView />}
               </main>
             </div>
