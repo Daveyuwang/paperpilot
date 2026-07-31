@@ -11,8 +11,18 @@ import threading
 from collections import Counter, OrderedDict, defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
+from .documents import (
+    LazyDocumentCache,
+    LoadedSkillReference,
+    SkillDocumentError,
+    SnapshotRootIdentity,
+    capture_snapshot_root,
+    load_optional_document_manifest,
+    load_verified_markdown_reference,
+    load_verified_skill_body,
+)
 from .models import (
     DEFAULT_CATALOG_LIMITS,
     DEFAULT_RENDER_LIMITS,
@@ -24,6 +34,7 @@ from .models import (
     SkillDiagnostic,
     SkillDiagnosticCode,
     SkillDiagnosticSeverity,
+    SkillReferenceDescriptor,
     SkillRenderLimits,
     SkillSelection,
 )
@@ -33,6 +44,104 @@ DEFAULT_BLOCKED_SKILL_NAMES = frozenset({"autoresearch"})
 _AUTORESEARCH_PATH_COMPONENTS = frozenset({"0-autoresearch-skill", "autoresearch"})
 _TOKEN_RE = re.compile(r"[a-z0-9]+|[\u3400-\u4dbf\u4e00-\u9fff]+", re.IGNORECASE)
 _ALPHA_DIGIT_BOUNDARY_RE = re.compile(r"(?<=[a-z])(?=\d)|(?<=\d)(?=[a-z])")
+_QUERY_STOPWORDS = frozenset(
+    {
+        "a",
+        "about",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "been",
+        "being",
+        "better",
+        "but",
+        "by",
+        "can",
+        "collaboration",
+        "could",
+        "did",
+        "do",
+        "does",
+        "explain",
+        "for",
+        "from",
+        "had",
+        "has",
+        "have",
+        "help",
+        "how",
+        "if",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "learning",
+        "limitation",
+        "limitations",
+        "lunch",
+        "machine",
+        "may",
+        "method",
+        "methods",
+        "might",
+        "ml",
+        "model",
+        "models",
+        "of",
+        "on",
+        "or",
+        "our",
+        "page",
+        "paper",
+        "papers",
+        "prior",
+        "process",
+        "research",
+        "result",
+        "results",
+        "sentence",
+        "settings",
+        "should",
+        "that",
+        "the",
+        "their",
+        "them",
+        "these",
+        "they",
+        "this",
+        "those",
+        "time",
+        "today",
+        "to",
+        "tomorrow",
+        "team",
+        "text",
+        "translate",
+        "under",
+        "was",
+        "we",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "will",
+        "with",
+        "without",
+        "work",
+        "works",
+        "would",
+        "yesterday",
+        "you",
+        "your",
+    }
+)
 _IGNORED_DIRECTORY_NAMES = frozenset(
     {".git", ".hg", ".svn", "__pycache__", "node_modules"}
 )
@@ -54,6 +163,12 @@ def _tokenize(text: str) -> tuple[str, ...]:
         elif token and ord(token[0]) >= 0x3400 and len(token) > 1:
             tokens.extend(token[index : index + 2] for index in range(len(token) - 1))
     return tuple(tokens)
+
+
+def _normalize_full_phrase(text: str) -> str:
+    """Normalize punctuation/case without discarding user-supplied words."""
+
+    return " ".join(match.group(0).casefold() for match in _TOKEN_RE.finditer(text))
 
 
 def _metadata_term_weights(skill: SkillDescriptor) -> Counter[str]:
@@ -108,7 +223,9 @@ def select_skills(
     if not candidates:
         return ()
 
-    query_tokens = _tokenize(query)
+    query_tokens = tuple(
+        token for token in _tokenize(query) if token not in _QUERY_STOPWORDS
+    )
     if not query_tokens:
         if names is None:
             return ()
@@ -123,7 +240,7 @@ def select_skills(
         document_frequency.update(terms.keys())
 
     population = len(candidates)
-    normalized_query = " ".join(query.casefold().split())
+    normalized_query = _normalize_full_phrase(query)
     selections: list[SkillSelection] = []
     for skill in candidates:
         terms = documents[skill.name]
@@ -144,12 +261,23 @@ def select_skills(
             )
             matched.append(token)
 
-        normalized_name = skill.name.replace("-", " ")
-        if normalized_query == skill.name or normalized_query == normalized_name:
+        normalized_name = _normalize_full_phrase(skill.name.replace("-", " "))
+        exact_name = normalized_query == normalized_name
+        exact_tag = any(
+            normalized_query == _normalize_full_phrase(tag)
+            for tag in skill.metadata.tags
+        )
+        if exact_name:
             score += 12.0
+        elif exact_tag:
+            score += 8.0
         elif normalized_query and normalized_query in normalized_name:
             score += 4.0
-        if score > min_score:
+        # A single generic metadata token (for example, ``search`` or
+        # ``sentence``) is not enough to activate an advisory skill.  One-term
+        # activation is reserved for an exact skill name or full upstream tag.
+        has_sufficient_signal = len(set(matched)) >= 2 or exact_name or exact_tag
+        if score > min_score and (has_sufficient_signal):
             selections.append(
                 SkillSelection(
                     skill=skill,
@@ -296,6 +424,13 @@ def _snapshot_revision(
                 "sha256": skill.content_sha256,
                 "availability": skill.availability.value,
                 "blocked_reason": skill.blocked_reason,
+                "references": [
+                    {
+                        "path": reference.relative_path,
+                        "sha256": reference.content_sha256,
+                    }
+                    for reference in skill.references
+                ],
             }
             for skill in sorted(
                 skills, key=lambda item: (item.name, item.relative_path)
@@ -333,12 +468,59 @@ def load_skill_catalog(
 
     root_path = Path(root).absolute()
     candidates, diagnostics = _discover_skill_files(root_path, limits)
-    parsed_files = []
+    try:
+        root_identity = capture_snapshot_root(root_path)
+        manifest_documents = load_optional_document_manifest(
+            root_path,
+            expected_root=root_identity,
+        )
+    except SkillDocumentError as exc:
+        root_identity = SnapshotRootIdentity(device=-1, inode=-1)
+        manifest_documents = {}
+        diagnostics.append(
+            SkillDiagnostic(
+                code=SkillDiagnosticCode.ROOT_INVALID,
+                message=f"snapshot manifest was ignored: {exc}",
+                relative_path=".",
+            )
+        )
+
+    parsed_descriptors: list[SkillDescriptor] = []
     for candidate in candidates:
         try:
-            parsed_files.append(
-                parse_skill_file(candidate, root=root_path, limits=limits)
-            )
+            parsed = parse_skill_file(candidate, root=root_path, limits=limits)
+            descriptor = parsed.descriptor
+            if manifest_documents is not None:
+                expected_digest = manifest_documents.get(descriptor.relative_path)
+                if expected_digest != descriptor.content_sha256:
+                    raise SkillFileError(
+                        SkillDiagnosticCode.PATH_INVALID,
+                        "skill document does not match the snapshot manifest",
+                        descriptor.relative_path,
+                    )
+                parent = PurePosixPath(descriptor.relative_path).parent
+                skill_directory = (
+                    "" if parent == PurePosixPath(".") else parent.as_posix()
+                )
+                prefix = (
+                    f"{skill_directory}/references/"
+                    if skill_directory
+                    else "references/"
+                )
+                references = tuple(
+                    SkillReferenceDescriptor(
+                        relative_path=path,
+                        content_sha256=digest,
+                    )
+                    for path, digest in sorted(manifest_documents.items())
+                    if path.startswith(prefix)
+                    and Path(path).suffix.casefold() in {".md", ".markdown"}
+                    and PurePosixPath(path).name != "SKILL.md"
+                )
+                descriptor = replace(descriptor, references=references)
+            # The parsed body is intentionally discarded here.  Only metadata
+            # survives catalog activation; selected text is re-read lazily.
+            parsed_descriptors.append(descriptor)
         except SkillFileError as exc:
             diagnostics.append(exc.as_diagnostic())
         except Exception as exc:  # noqa: BLE001 - isolate each untrusted document
@@ -356,27 +538,25 @@ def load_skill_catalog(
             )
 
     by_name = defaultdict(list)
-    for parsed in parsed_files:
-        by_name[parsed.descriptor.name].append(parsed)
+    for descriptor in parsed_descriptors:
+        by_name[descriptor.name].append(descriptor)
 
     duplicate_names = {name for name, entries in by_name.items() if len(entries) > 1}
     for name in sorted(duplicate_names):
-        entries = sorted(by_name[name], key=lambda item: item.descriptor.relative_path)
-        all_paths = ", ".join(item.descriptor.relative_path for item in entries)
+        entries = sorted(by_name[name], key=lambda item: item.relative_path)
+        all_paths = ", ".join(item.relative_path for item in entries)
         for item in entries:
             diagnostics.append(
                 SkillDiagnostic(
                     code=SkillDiagnosticCode.DUPLICATE_NAME,
                     message=f"duplicate skill name {name!r}; conflicts: {all_paths}",
-                    relative_path=item.descriptor.relative_path,
+                    relative_path=item.relative_path,
                 ),
             )
 
     blocked = {name.casefold() for name in blocked_skill_names}
     skills: list[SkillDescriptor] = []
-    bodies: dict[str, str] = {}
-    for parsed in sorted(parsed_files, key=lambda item: item.descriptor.relative_path):
-        descriptor = parsed.descriptor
+    for descriptor in sorted(parsed_descriptors, key=lambda item: item.relative_path):
         if descriptor.name in duplicate_names:
             continue
         blocks_autoresearch = "autoresearch" in blocked and any(
@@ -399,7 +579,6 @@ def load_skill_catalog(
                 ),
             )
         skills.append(descriptor)
-        bodies[descriptor.name] = parsed.body
 
     skills_tuple = tuple(
         sorted(skills, key=lambda item: (item.name, item.relative_path))
@@ -412,15 +591,32 @@ def load_skill_catalog(
     )
     revision = _snapshot_revision(skills_tuple, diagnostics_tuple)
     try:
-        snapshot_root = root_path.resolve(strict=True)
-    except (OSError, RuntimeError):
-        snapshot_root = root_path
+        final_identity = capture_snapshot_root(root_path)
+    except SkillDocumentError:
+        final_identity = SnapshotRootIdentity(device=-2, inode=-2)
+    if final_identity != root_identity:
+        diagnostics_tuple = tuple(
+            sorted(
+                (
+                    *diagnostics_tuple,
+                    SkillDiagnostic(
+                        code=SkillDiagnosticCode.ROOT_INVALID,
+                        message="snapshot root identity changed while loading catalog",
+                        relative_path=".",
+                    ),
+                ),
+                key=lambda item: (item.relative_path, item.code.value, item.message),
+            )
+        )
+        skills_tuple = ()
+        revision = _snapshot_revision(skills_tuple, diagnostics_tuple)
     return SkillCatalogSnapshot(
-        root=snapshot_root,
+        root=root_path,
+        root_device=root_identity.device,
+        root_inode=root_identity.inode,
         revision=revision,
         skills=skills_tuple,
         diagnostics=diagnostics_tuple,
-        _bodies=bodies,
     )
 
 
@@ -435,6 +631,9 @@ class SkillRegistry:
         render_limits: SkillRenderLimits = DEFAULT_RENDER_LIMITS,
         blocked_skill_names: Iterable[str] = DEFAULT_BLOCKED_SKILL_NAMES,
         history_size: int = 8,
+        source_revision: str = "local",
+        document_cache: LazyDocumentCache | None = None,
+        reference_max_bytes: int | None = None,
     ) -> None:
         if history_size <= 0:
             raise ValueError("history_size must be positive")
@@ -443,6 +642,12 @@ class SkillRegistry:
         self.render_limits = render_limits
         self.blocked_skill_names = frozenset(blocked_skill_names)
         self.history_size = history_size
+        self.source_revision = source_revision
+        self.document_cache = document_cache or LazyDocumentCache(
+            max_entries=16,
+            max_bytes=2 * 1024 * 1024,
+        )
+        self.reference_max_bytes = reference_max_bytes or limits.max_file_bytes
         self._lock = threading.RLock()
         self._history: OrderedDict[str, SkillCatalogSnapshot] = OrderedDict()
         self._current_revision: str | None = None
@@ -527,6 +732,113 @@ class SkillRegistry:
             names,
             expected_revision=revision,
             limits=limits or self.render_limits,
+            body_loader=lambda descriptor: self._load_body(snapshot, descriptor),
+        )
+
+    def _cache_key(
+        self,
+        snapshot: SkillCatalogSnapshot,
+        path: str,
+        digest: str,
+    ) -> tuple[str, str, str, str]:
+        return (self.source_revision, snapshot.revision, path, digest)
+
+    def _load_body(
+        self,
+        snapshot: SkillCatalogSnapshot,
+        descriptor: SkillDescriptor,
+    ) -> str:
+        snapshot.require(descriptor.name)
+        key = self._cache_key(
+            snapshot,
+            descriptor.relative_path,
+            descriptor.content_sha256,
+        )
+        return self.document_cache.get_or_load(
+            key,
+            kind="skill",
+            skill_name=descriptor.name,
+            loader=lambda: load_verified_skill_body(
+                snapshot.root,
+                descriptor,
+                limits=self.limits,
+                expected_root=SnapshotRootIdentity(
+                    device=snapshot.root_device,
+                    inode=snapshot.root_inode,
+                ),
+            ),
+        )
+
+    def is_loaded(
+        self,
+        name: str,
+        *,
+        revision: str | None = None,
+    ) -> bool:
+        snapshot = self.snapshot(revision)
+        descriptor = snapshot.require(name, include_blocked=True)
+        return self.document_cache.contains(
+            self._cache_key(
+                snapshot,
+                descriptor.relative_path,
+                descriptor.content_sha256,
+            )
+        )
+
+    def load_reference(
+        self,
+        name: str,
+        path: str,
+        *,
+        revision: str | None = None,
+    ) -> LoadedSkillReference:
+        """Explicitly load one manifest-listed reference for an available skill."""
+
+        snapshot = self.snapshot(revision)
+        descriptor = snapshot.require(name)
+        parent = PurePosixPath(descriptor.relative_path).parent
+        skill_directory = "" if parent == PurePosixPath(".") else parent.as_posix()
+        full_path = path
+        if path not in descriptor.reference_paths:
+            full_path = f"{skill_directory}/{path}" if skill_directory else path
+        reference = next(
+            (item for item in descriptor.references if item.relative_path == full_path),
+            None,
+        )
+        if reference is None:
+            raise KeyError(f"reference is not manifest-listed for {name}: {path}")
+        key = self._cache_key(
+            snapshot,
+            reference.relative_path,
+            reference.content_sha256,
+        )
+        content = self.document_cache.get_or_load(
+            key,
+            kind="reference",
+            skill_name=name,
+            loader=lambda: (
+                load_verified_markdown_reference(
+                    snapshot.root,
+                    reference,
+                    max_bytes=self.reference_max_bytes,
+                    expected_root=SnapshotRootIdentity(
+                        device=snapshot.root_device,
+                        inode=snapshot.root_inode,
+                    ),
+                ).content
+            ),
+        )
+        return LoadedSkillReference(
+            relative_path=reference.relative_path,
+            content_sha256=reference.content_sha256,
+            content=content,
+        )
+
+    def cache_status(self) -> dict[str, int]:
+        snapshot = self.current
+        return self.document_cache.status(
+            source_revision=self.source_revision,
+            catalog_revision=snapshot.revision,
         )
 
     def render(

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
+
+from app.skills.documents import SkillDocumentError
 from app.skills.models import (
     SkillAvailability,
     SkillDiagnosticCode,
@@ -132,7 +135,105 @@ def test_selection_is_deterministic_and_metadata_only(
     assert [item.skill.name for item in requested] == ["beta-method", "alpha-method"]
 
 
-def test_registry_renders_the_pinned_revision_after_refresh(
+def test_selection_rejects_generic_description_only_matches(
+    tmp_path: Path,
+    write_skill,
+) -> None:
+    write_skill(
+        tmp_path,
+        "tracking",
+        name="weights-and-biases",
+        description="Track machine learning experiments for a team in real time",
+        tags=("experiments", "metrics", "wandb"),
+    )
+    write_skill(
+        tmp_path,
+        "artifact",
+        name="ara-research-manager",
+        description="Show how the research artifact evolves through each stage",
+        tags=("artifacts", "research"),
+    )
+    write_skill(
+        tmp_path,
+        "vector",
+        name="qdrant-vector-search",
+        description="Search a page-sized corpus with vector similarity",
+        tags=("Vector Search", "RAG"),
+    )
+    write_skill(
+        tmp_path,
+        "sentences",
+        name="sentence-transformers",
+        description="Encode and explain sentence embeddings",
+        tags=("Sentence Embeddings",),
+    )
+    write_skill(
+        tmp_path,
+        "audio",
+        name="audiocraft",
+        description="Generate and translate text into audio",
+        tags=("Text to Audio",),
+    )
+    write_skill(
+        tmp_path,
+        "agents",
+        name="crewai",
+        description="Coordinate a collaboration process between agents",
+        tags=("Multi Agent",),
+    )
+    snapshot = load_skill_catalog(tmp_path)
+
+    unrelated_queries = (
+        "What time is tomorrow's team lunch?",
+        "How is the weather today?",
+        "What are the limitations of this paper?",
+        "Is this better than prior work?",
+        "Search this page",
+        "Explain this sentence",
+        "Translate this text",
+        "Help our collaboration process",
+    )
+    assert all(select_skills(snapshot, query) == () for query in unrelated_queries)
+    assert [item.skill.name for item in select_skills(snapshot, "WandB")] == [
+        "weights-and-biases"
+    ]
+    assert [item.skill.name for item in select_skills(snapshot, "Vector Search")] == [
+        "qdrant-vector-search"
+    ]
+    assert [
+        item.skill.name
+        for item in select_skills(snapshot, "track experiments and metrics")
+    ] == ["weights-and-biases"]
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        {"version": 1, "document_count": 0, "documents": {}},
+        {"version": 2, "document_count": 1, "documents": {"review/SKILL.md": "0" * 64}},
+        {"version": 1, "document_count": 2, "documents": {"review/SKILL.md": "0" * 64}},
+    ],
+)
+def test_present_invalid_snapshot_manifest_fails_closed(
+    tmp_path: Path,
+    write_skill,
+    marker: dict,
+) -> None:
+    write_skill(tmp_path, "review", name="manifest-review")
+    (tmp_path / ".paperpilot-snapshot.json").write_text(
+        json.dumps(marker),
+        encoding="utf-8",
+    )
+
+    snapshot = load_skill_catalog(tmp_path)
+
+    assert snapshot.skills == ()
+    assert any(
+        item.code is SkillDiagnosticCode.ROOT_INVALID for item in snapshot.diagnostics
+    )
+
+
+def test_registry_fails_closed_when_mutable_root_breaks_a_pinned_revision(
     tmp_path: Path,
     write_skill,
 ) -> None:
@@ -158,12 +259,22 @@ def test_registry_renders_the_pinned_revision_after_refresh(
     second = registry.refresh()
 
     assert first.revision != second.revision
-    assert "OLD REVISION GUIDANCE" in registry.render(
-        ["review-method"], revision=first.revision
-    )
-    assert "NEW REVISION GUIDANCE" not in registry.render(
-        ["review-method"], revision=first.revision
-    )
+    with pytest.raises(SkillDocumentError):
+        registry.render(["review-method"], revision=first.revision)
     assert "NEW REVISION GUIDANCE" in registry.render(
         ["review-method"], revision=second.revision
     )
+
+
+def test_catalog_snapshot_retains_metadata_not_bodies(
+    tmp_path: Path,
+    write_skill,
+) -> None:
+    secret = "BODY-NOT-RESIDENT-IN-CATALOG"
+    write_skill(tmp_path, "metadata", name="metadata-only", body=f"{secret}\n")
+
+    snapshot = load_skill_catalog(tmp_path)
+
+    assert not hasattr(snapshot, "_bodies")
+    assert secret not in repr(snapshot)
+    assert snapshot.require("metadata-only").body_chars == len(secret) + 1

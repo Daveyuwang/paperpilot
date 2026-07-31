@@ -10,8 +10,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
 from app.skills.source import (
     DEFAULT_REPOSITORY_URL,
+    DEFAULT_RETAINED_SNAPSHOTS,
     GitSkillSource,
     SourceLockTimeout,
     SourceRefreshError,
@@ -233,6 +235,36 @@ def test_due_refresh_creates_new_version_and_keeps_old_snapshot(
     assert second.revision != first.revision
     assert first.root.is_dir()
     assert second.root.is_dir()
+
+
+def test_refresh_prunes_snapshots_to_registry_retention(
+    tmp_path: Path,
+    local_upstream: Path,
+) -> None:
+    cache = tmp_path / "cache"
+    source = _new_source(cache, local_upstream)
+    skill = local_upstream / "literature-review/SKILL.md"
+    snapshots = []
+
+    for index in range(DEFAULT_RETAINED_SNAPSHOTS + 2):
+        if index:
+            skill.write_text(
+                skill.read_text(encoding="utf-8") + f"Revision {index}.\n",
+                encoding="utf-8",
+            )
+            _commit(local_upstream, f"revision {index}")
+        snapshot = source.refresh()
+        snapshots.append(snapshot)
+        os.utime(snapshot.root, ns=(index + 1, index + 1))
+
+    retained = {path.name for path in (cache / "snapshots").iterdir() if path.is_dir()}
+    assert len(retained) == DEFAULT_RETAINED_SNAPSHOTS
+    assert snapshots[-1].revision in retained
+    assert all(snapshot.revision not in retained for snapshot in snapshots[:2])
+    assert all(
+        snapshot.revision in retained
+        for snapshot in snapshots[-DEFAULT_RETAINED_SNAPSHOTS:]
+    )
 
 
 def test_refresh_failure_returns_stale_last_known_good_with_error(

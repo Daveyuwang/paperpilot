@@ -13,8 +13,12 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
 
     # Database
-    database_url: str = "postgresql+asyncpg://paperpilot:paperpilot@postgres:5432/paperpilot"
-    database_url_sync: str = "postgresql://paperpilot:paperpilot@postgres:5432/paperpilot"
+    database_url: str = (
+        "postgresql+asyncpg://paperpilot:paperpilot@postgres:5432/paperpilot"
+    )
+    database_url_sync: str = (
+        "postgresql://paperpilot:paperpilot@postgres:5432/paperpilot"
+    )
 
     # Redis
     redis_url: str = "redis://redis:6379/0"
@@ -45,7 +49,9 @@ class Settings(BaseSettings):
 
     # Agent skills (third-party SKILL.md files are advisory prompt context only)
     agent_skills_enabled: bool = True
-    agent_skills_repo_url: str = "https://github.com/Orchestra-Research/AI-research-SKILLs.git"
+    agent_skills_repo_url: str = (
+        "https://github.com/Orchestra-Research/AI-research-SKILLs.git"
+    )
     agent_skills_repo_ref: str = "main"
     agent_skills_cache_dir: str = ".runtime/skills"
     agent_skills_refresh_seconds: int = 86400
@@ -55,6 +61,9 @@ class Settings(BaseSettings):
     agent_skills_max_selected: int = 2
     agent_skills_max_prompt_chars: int = 12_000
     agent_skills_min_score: float = 6.0
+    agent_skills_cache_max_entries: int = 16
+    agent_skills_cache_max_bytes: int = 2_000_000
+    agent_skills_max_reference_bytes: int = 200_000
     agent_skills_blocked_names: str = "autoresearch"
 
     # External APIs
@@ -106,14 +115,52 @@ class Settings(BaseSettings):
             "agent_skills_max_count": self.agent_skills_max_count,
             "agent_skills_max_file_bytes": self.agent_skills_max_file_bytes,
             "agent_skills_max_selected": self.agent_skills_max_selected,
+            "agent_skills_cache_max_entries": self.agent_skills_cache_max_entries,
+            "agent_skills_cache_max_bytes": self.agent_skills_cache_max_bytes,
+            "agent_skills_max_reference_bytes": self.agent_skills_max_reference_bytes,
         }
         invalid = [name for name, value in positive_fields.items() if value <= 0]
         if invalid:
-            raise ValueError(f"agent skill settings must be positive: {', '.join(invalid)}")
+            raise ValueError(
+                f"agent skill settings must be positive: {', '.join(invalid)}"
+            )
         if self.agent_skills_max_prompt_chars < 1_024:
             raise ValueError("agent_skills_max_prompt_chars must be at least 1024")
         if self.agent_skills_min_score < 0:
             raise ValueError("agent_skills_min_score cannot be negative")
+        upper_bounds = {
+            "agent_skills_max_count": (self.agent_skills_max_count, 2_048),
+            "agent_skills_max_file_bytes": (
+                self.agent_skills_max_file_bytes,
+                2 * 1024 * 1024,
+            ),
+            "agent_skills_max_selected": (self.agent_skills_max_selected, 8),
+            "agent_skills_max_prompt_chars": (
+                self.agent_skills_max_prompt_chars,
+                128_000,
+            ),
+            "agent_skills_cache_max_entries": (
+                self.agent_skills_cache_max_entries,
+                512,
+            ),
+            "agent_skills_cache_max_bytes": (
+                self.agent_skills_cache_max_bytes,
+                64 * 1024 * 1024,
+            ),
+            "agent_skills_max_reference_bytes": (
+                self.agent_skills_max_reference_bytes,
+                2 * 1024 * 1024,
+            ),
+        }
+        oversized = [
+            name for name, (value, maximum) in upper_bounds.items() if value > maximum
+        ]
+        if oversized:
+            raise ValueError(
+                f"agent skill settings exceed safety bounds: {', '.join(oversized)}"
+            )
+        if self.agent_skills_cache_max_bytes < 1_024:
+            raise ValueError("agent_skills_cache_max_bytes must be at least 1024")
         return self
 
     @property

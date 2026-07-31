@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -17,16 +18,23 @@ import structlog
 
 from app.config import Settings, get_settings
 
+from .documents import LazyDocumentCache, LoadedSkillReference, SkillDocumentError
 from .models import (
     DEFAULT_CATALOG_LIMITS,
     SkillDescriptor,
     SkillRenderLimits,
+    SkillSelection,
 )
 from .registry import SkillRegistry, SkillSnapshotNotFoundError
-from .source import GitSkillSource, SourceSnapshot, SourceStatus
+from .source import (
+    DEFAULT_RETAINED_SNAPSHOTS,
+    GitSkillSource,
+    SourceSnapshot,
+    SourceStatus,
+)
 
 logger = structlog.get_logger()
-_MAX_RETAINED_REGISTRIES = 8
+_MAX_RETAINED_REGISTRIES = DEFAULT_RETAINED_SNAPSHOTS
 
 _QUERY_EXPANSIONS = (
     (
@@ -47,23 +55,6 @@ _QUERY_EXPANSIONS = (
     (("推理服务",), " inference serving"),
 )
 
-_WRITING_MARKERS = (
-    "write",
-    "writing",
-    "draft",
-    "revise",
-    "edit",
-    "latex",
-    "submit",
-    "submission",
-    "camera-ready",
-    "conference paper",
-    "写",
-    "撰写",
-    "润色",
-    "修改",
-    "投稿",
-)
 _IDEATION_MARKERS = (
     "brainstorm",
     "ideat",
@@ -89,6 +80,95 @@ _ML_PAPER_MARKERS = (
     "深度学习",
 )
 _SYSTEMS_PAPER_MARKERS = ("osdi", "sosp", "asplos", "nsdi", "eurosys", "systems paper")
+_ACADEMIC_PLOTTING_MARKERS = (
+    "chart",
+    "diagram",
+    "figure",
+    "matplotlib",
+    "plot",
+    "seaborn",
+    "visualiz",
+    "图表",
+    "绘图",
+    "可视化",
+)
+_CONFERENCE_TALK_MARKERS = (
+    "beamer",
+    "oral talk",
+    "pptx",
+    "presentation",
+    "slide",
+    "speaker note",
+    "spotlight",
+    "talk script",
+    "幻灯片",
+    "演讲",
+    "汇报",
+)
+_SPECIALIZED_SKILL_MARKERS = {
+    "academic-plotting": _ACADEMIC_PLOTTING_MARKERS,
+    "presenting-conference-talks": _CONFERENCE_TALK_MARKERS,
+}
+_ACADEMIC_WORDS = frozenset(
+    {
+        "acl",
+        "aaai",
+        "article",
+        "camera",
+        "citation",
+        "citations",
+        "colm",
+        "conference",
+        "dissertation",
+        "iclr",
+        "icml",
+        "journal",
+        "manuscript",
+        "neurips",
+        "paper",
+        "papers",
+        "publication",
+        "thesis",
+    }
+)
+_ACADEMIC_CJK_MARKERS = (
+    "论文",
+    "稿件",
+    "投稿",
+    "期刊",
+    "文献",
+)
+_WORD_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
+
+
+def _has_writing_action(query: str) -> bool:
+    lowered = query.casefold()
+    words = set(_WORD_RE.findall(lowered))
+    return bool(
+        words
+        & {
+            "draft",
+            "edit",
+            "latex",
+            "revise",
+            "submission",
+            "submit",
+            "write",
+            "writing",
+        }
+    ) or any(marker in lowered for marker in ("写", "撰写", "润色", "修改", "投稿"))
+
+
+def _has_academic_intent(query: str) -> bool:
+    lowered = query.casefold()
+    return bool(set(_WORD_RE.findall(lowered)) & _ACADEMIC_WORDS) or any(
+        marker in lowered for marker in _ACADEMIC_CJK_MARKERS
+    )
+
+
+def _has_systems_paper_intent(query: str) -> bool:
+    lowered = query.casefold()
+    return any(marker in lowered for marker in _SYSTEMS_PAPER_MARKERS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +178,15 @@ class SelectedSkillContext:
     names: tuple[str, ...] = ()
     revision: str | None = None
     scores: tuple[float, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SkillSelectionPreview:
+    """Metadata-only routing result used by the inspector UI."""
+
+    selections: tuple[SkillSelection, ...] = ()
+    source_revision: str | None = None
+    catalog_revision: str | None = None
 
 
 class SkillService:
@@ -118,6 +207,10 @@ class SkillService:
                 max_file_bytes=settings.agent_skills_max_file_bytes,
             )
             self._blocked_names = frozenset(settings.agent_skills_blocked_names_list)
+            self._document_cache: LazyDocumentCache | None = LazyDocumentCache(
+                max_entries=settings.agent_skills_cache_max_entries,
+                max_bytes=settings.agent_skills_cache_max_bytes,
+            )
             self.source: GitSkillSource | None = source or GitSkillSource(
                 settings.agent_skills_cache_dir,
                 repository_url=settings.agent_skills_repo_url,
@@ -135,6 +228,7 @@ class SkillService:
             # loader settings and must never construct a network-capable source.
             self._catalog_limits = DEFAULT_CATALOG_LIMITS
             self._blocked_names = frozenset()
+            self._document_cache = None
             self.source = None
         self._lock = threading.RLock()
         self._refresh_lock = asyncio.Lock()
@@ -247,6 +341,9 @@ class SkillService:
                 source_snapshot.root,
                 limits=self._catalog_limits,
                 blocked_skill_names=self._blocked_names,
+                source_revision=source_snapshot.revision,
+                document_cache=self._document_cache,
+                reference_max_bytes=self.settings.agent_skills_max_reference_bytes,
             )
             catalog = registry.refresh()
             if not catalog.available_skills:
@@ -289,19 +386,67 @@ class SkillService:
     def select(self, query: str, *, flow: str) -> SelectedSkillContext:
         """Select from the in-memory catalog; this method never performs I/O."""
 
-        if not self.enabled:
-            return SelectedSkillContext()
+        preview = self.preview(query, flow=flow)
+        context = SelectedSkillContext(
+            names=tuple(item.skill.name for item in preview.selections),
+            revision=preview.source_revision,
+            scores=tuple(item.score for item in preview.selections),
+        )
+        if context.names:
+            logger.info(
+                "skills_selected",
+                flow=flow,
+                skill_names=list(context.names),
+                skill_scores=list(context.scores),
+                skill_revision=context.revision,
+            )
+        return context
+
+    def preview(
+        self,
+        query: str,
+        *,
+        flow: str,
+        limit: int | None = None,
+    ) -> SkillSelectionPreview:
+        """Explain runtime selection using metadata only and zero document I/O."""
+
+        return self.preview_view(query, flow=flow, limit=limit)[0]
+
+    def preview_view(
+        self,
+        query: str,
+        *,
+        flow: str,
+        limit: int | None = None,
+    ) -> tuple[SkillSelectionPreview, dict[str, Any], tuple[bool, ...]]:
+        """Return a routing preview and status pinned to one catalog revision."""
+
         with self._lock:
             revision = self._current_revision
             registry = self._registries.get(revision or "")
-        if registry is None or revision is None:
-            return SelectedSkillContext()
+            source_snapshot = self._source_snapshot
+            state = self._state
+            error = self._error
+        if not self.enabled or registry is None or revision is None:
+            status = self._status_payload(
+                revision=revision,
+                registry=registry,
+                source_snapshot=source_snapshot,
+                state=state,
+                error=error,
+                cache_status=self._empty_cache_status(),
+            )
+            return SkillSelectionPreview(), status, ()
+
+        catalog = registry.current
 
         expanded_query = self._expand_query(query)
         candidates = registry.select(
             expanded_query,
+            revision=catalog.revision,
             limit=max(12, self.settings.agent_skills_max_selected * 6),
-            min_score=self.settings.agent_skills_min_score,
+            min_score=0.0,
         )
         candidates = tuple(
             sorted(
@@ -313,25 +458,40 @@ class SkillService:
                 ),
             )
         )
+        requested_limit = min(
+            max(
+                0,
+                limit if limit is not None else self.settings.agent_skills_max_selected,
+            ),
+            self.settings.agent_skills_max_selected,
+        )
         selections = tuple(
             item
             for item in candidates
             if self._allowed_for_flow(item.skill, query=query, flow=flow)
-        )[: self.settings.agent_skills_max_selected]
-        context = SelectedSkillContext(
-            names=tuple(item.skill.name for item in selections),
-            revision=revision,
-            scores=tuple(item.score for item in selections),
-        )
-        if context.names:
-            logger.info(
-                "skills_selected",
-                flow=flow,
-                skill_names=list(context.names),
-                skill_scores=list(context.scores),
-                skill_revision=revision,
+            and (
+                item.score > self.settings.agent_skills_min_score
+                or self._query_preference(item.skill, query) > 0
             )
-        return context
+        )[:requested_limit]
+        preview = SkillSelectionPreview(
+            selections=selections,
+            source_revision=revision,
+            catalog_revision=catalog.revision,
+        )
+        status = self._status_payload(
+            revision=revision,
+            registry=registry,
+            source_snapshot=source_snapshot,
+            state=state,
+            error=error,
+            cache_status=registry.cache_status(),
+        )
+        loaded = tuple(
+            registry.is_loaded(item.skill.name, revision=catalog.revision)
+            for item in selections
+        )
+        return preview, status, loaded
 
     @staticmethod
     def _query_preference(skill: SkillDescriptor, query: str) -> int:
@@ -343,16 +503,22 @@ class SkillService:
         if skill.name == "ml-paper-writing":
             if any(marker in lowered for marker in _ML_PAPER_MARKERS):
                 return 2
-            if any(marker in lowered for marker in _WRITING_MARKERS):
+            if _has_writing_action(query) and _has_academic_intent(query):
                 return 1
         return 0
 
     @staticmethod
     def _expand_query(query: str) -> str:
         expanded = query
+        lowered = query.casefold()
+        words = set(_WORD_RE.findall(lowered))
         for markers, addition in _QUERY_EXPANSIONS:
-            if any(marker in query for marker in markers):
+            if any(marker.casefold() in lowered for marker in markers):
                 expanded += addition
+        if words & {"quantize", "quantized", "quantizing"}:
+            expanded += " quantization"
+        if _has_writing_action(query) and _has_academic_intent(query):
+            expanded += " academic writing drafting"
         return expanded
 
     @staticmethod
@@ -362,12 +528,27 @@ class SkillService:
         query: str,
         flow: str,
     ) -> bool:
-        if flow != "paper_qa":
-            return True
         lowered = query.casefold()
         category = skill.metadata.category
+        if skill.name == "systems-paper-writing":
+            if not (_has_writing_action(query) and _has_academic_intent(query)):
+                return False
+            if not _has_systems_paper_intent(query):
+                return False
+        elif skill.name == "ml-paper-writing":
+            if not (_has_writing_action(query) and _has_academic_intent(query)):
+                return False
+            if _has_systems_paper_intent(query):
+                return False
+        specialized_markers = _SPECIALIZED_SKILL_MARKERS.get(skill.name)
+        if specialized_markers is not None and not any(
+            marker in lowered for marker in specialized_markers
+        ):
+            return False
+        if flow != "paper_qa":
+            return True
         if category == "ml-paper-writing":
-            return any(marker in lowered for marker in _WRITING_MARKERS)
+            return True
         if category == "research-ideation":
             return any(marker in lowered for marker in _IDEATION_MARKERS)
         if category == "agent-native-research-artifact":
@@ -412,7 +593,13 @@ class SkillService:
         )
         try:
             rendered = registry.render(names, limits=limits)
-        except (KeyError, ValueError, SkillSnapshotNotFoundError) as exc:
+        except (
+            KeyError,
+            OSError,
+            ValueError,
+            SkillDocumentError,
+            SkillSnapshotNotFoundError,
+        ) as exc:
             logger.warning(
                 "skill_render_failed",
                 skill_revision=revision,
@@ -425,26 +612,200 @@ class SkillService:
         suffix = "\n[Untrusted skill reference truncated by PaperPilot.]"
         return rendered[: max(0, total_limit - len(suffix))] + suffix
 
+    def load_references(
+        self,
+        context: SelectedSkillContext,
+        skill_name: str,
+        paths: Sequence[str],
+    ) -> tuple[LoadedSkillReference, ...]:
+        """Explicitly load references for one skill selected in this exact run."""
+
+        if (
+            not self.enabled
+            or not context.revision
+            or skill_name not in context.names
+            or not paths
+        ):
+            return ()
+        with self._lock:
+            registry = self._registries.get(context.revision)
+        if registry is None:
+            return ()
+        unique_paths = tuple(dict.fromkeys(paths))[:8]
+        try:
+            return tuple(
+                registry.load_reference(
+                    skill_name,
+                    path,
+                    revision=registry.current.revision,
+                )
+                for path in unique_paths
+            )
+        except (
+            KeyError,
+            OSError,
+            ValueError,
+            SkillDocumentError,
+            SkillSnapshotNotFoundError,
+        ) as exc:
+            logger.warning(
+                "skill_reference_load_failed",
+                skill_revision=context.revision,
+                skill_name=skill_name,
+                reference_paths=list(unique_paths),
+                error=str(exc),
+            )
+            return ()
+
     def descriptors(self) -> tuple[SkillDescriptor, ...]:
         registry = self._current_registry()
         return registry.current.skills if registry else ()
 
+    def catalog_view(
+        self,
+        *,
+        include_items: bool = True,
+    ) -> tuple[dict[str, Any], tuple[tuple[SkillDescriptor, bool], ...]]:
+        """Return status and descriptors pinned to one active registry."""
+
+        with self._lock:
+            revision = self._current_revision
+            registry = self._registries.get(revision or "")
+            source_snapshot = self._source_snapshot
+            state = self._state
+            error = self._error
+        catalog = registry.current if registry else None
+        cache_status = (
+            registry.cache_status()
+            if registry is not None and self._document_cache is not None
+            else self._empty_cache_status()
+        )
+        status = self._status_payload(
+            revision=revision,
+            registry=registry,
+            source_snapshot=source_snapshot,
+            state=state,
+            error=error,
+            cache_status=cache_status,
+        )
+        items = (
+            tuple(
+                (
+                    skill,
+                    registry.is_loaded(skill.name, revision=catalog.revision),
+                )
+                for skill in catalog.skills
+            )
+            if include_items and registry is not None and catalog is not None
+            else ()
+        )
+        return status, items
+
+    def descriptor_view(
+        self,
+        name: str,
+    ) -> tuple[SkillDescriptor | None, str | None, str | None, bool]:
+        """Return one descriptor and its exact source/catalog revisions."""
+
+        with self._lock:
+            source_revision = self._current_revision
+            registry = self._registries.get(source_revision or "")
+        if registry is None:
+            return None, source_revision, None, False
+        catalog = registry.current
+        descriptor = catalog.get(name, include_blocked=True)
+        if descriptor is None:
+            return None, source_revision, catalog.revision, False
+        return (
+            descriptor,
+            source_revision,
+            catalog.revision,
+            registry.is_loaded(name, revision=catalog.revision),
+        )
+
     def descriptor(self, name: str) -> SkillDescriptor | None:
         registry = self._current_registry()
         return registry.current.get(name, include_blocked=True) if registry else None
+
+    def is_loaded(self, name: str) -> bool:
+        registry = self._current_registry()
+        if registry is None:
+            return False
+        try:
+            return registry.is_loaded(name)
+        except (KeyError, SkillSnapshotNotFoundError):
+            return False
 
     def _current_registry(self) -> SkillRegistry | None:
         with self._lock:
             return self._registries.get(self._current_revision or "")
 
     def status(self) -> dict[str, Any]:
-        registry = self._current_registry()
-        catalog = registry.current if registry else None
+        return self.status_view()[0]
+
+    def status_view(self) -> tuple[dict[str, Any], tuple[dict[str, str], ...]]:
+        """Return loader status and diagnostics from one pinned catalog."""
+
         with self._lock:
+            revision = self._current_revision
+            registry = self._registries.get(revision or "")
             source_snapshot = self._source_snapshot
             state = self._state
             error = self._error
-            revision = self._current_revision
+        catalog = registry.current if registry else None
+        cache_status = (
+            registry.cache_status()
+            if registry is not None and self._document_cache is not None
+            else self._empty_cache_status()
+        )
+        status = self._status_payload(
+            revision=revision,
+            registry=registry,
+            source_snapshot=source_snapshot,
+            state=state,
+            error=error,
+            cache_status=cache_status,
+        )
+        diagnostics = tuple(
+            {
+                "code": item.code.value,
+                "severity": item.severity.value,
+                "path": item.relative_path,
+                "message": item.message,
+            }
+            for item in (catalog.diagnostics if catalog else ())
+        )
+        return status, diagnostics
+
+    def _empty_cache_status(self) -> dict[str, int]:
+        return {
+            "loaded_count": 0,
+            "loaded_bytes": 0,
+            "loaded_reference_count": 0,
+            "cache_entry_count": 0,
+            "cache_total_bytes": 0,
+            "cache_max_entries": (
+                self._document_cache.max_entries if self._document_cache else 0
+            ),
+            "cache_max_bytes": (
+                self._document_cache.max_bytes if self._document_cache else 0
+            ),
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "cache_evictions": 0,
+        }
+
+    def _status_payload(
+        self,
+        *,
+        revision: str | None,
+        registry: SkillRegistry | None,
+        source_snapshot: SourceSnapshot | None,
+        state: str,
+        error: str | None,
+        cache_status: dict[str, int],
+    ) -> dict[str, Any]:
+        catalog = registry.current if registry else None
         return {
             "enabled": self.enabled,
             "state": state,
@@ -460,21 +821,12 @@ class SkillService:
             "quarantined_count": catalog.quarantined_count if catalog else 0,
             "diagnostic_count": len(catalog.diagnostics) if catalog else 0,
             "error": error,
+            "cache_scope": "process",
+            **cache_status,
         }
 
     def diagnostics(self) -> tuple[dict[str, str], ...]:
-        registry = self._current_registry()
-        if registry is None:
-            return ()
-        return tuple(
-            {
-                "code": item.code.value,
-                "severity": item.severity.value,
-                "path": item.relative_path,
-                "message": item.message,
-            }
-            for item in registry.current.diagnostics
-        )
+        return self.status_view()[1]
 
 
 @lru_cache
@@ -484,6 +836,7 @@ def get_skill_service() -> SkillService:
 
 __all__ = [
     "SelectedSkillContext",
+    "SkillSelectionPreview",
     "SkillService",
     "get_skill_service",
 ]

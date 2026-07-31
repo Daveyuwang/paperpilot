@@ -5,10 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
+
 from app.config import Settings
 from app.skills.service import SkillService
 from app.skills.source import SourceSnapshot, SourceStatus
-from pydantic import ValidationError
 
 
 class NoIoSource:
@@ -21,7 +22,7 @@ class NoIoSource:
         raise AssertionError("select/render must not fetch source state")
 
 
-def test_select_and_render_use_only_the_activated_in_memory_snapshot(
+def test_select_is_zero_io_and_render_lazily_reads_selected_body(
     tmp_path: Path,
     write_skill,
     monkeypatch,
@@ -54,22 +55,36 @@ def test_select_and_render_use_only_the_activated_in_memory_snapshot(
         )
     )
 
-    # The request path must continue to work even when the activated source
-    # document is gone and every parser/catalog entry point would explode.
-    skill_path.unlink()
+    from app.skills import documents
 
-    def unexpected_io(*_args, **_kwargs):
-        raise AssertionError("select/render attempted parser or catalog I/O")
+    original_read = documents._read_relative_regular_file
+    reads: list[str] = []
 
-    monkeypatch.setattr("app.skills.parser.parse_skill_file", unexpected_io)
-    monkeypatch.setattr("app.skills.registry.load_skill_catalog", unexpected_io)
+    def observe_read(*args, **kwargs):
+        reads.append(args[1])
+        return original_read(*args, **kwargs)
+
+    monkeypatch.setattr(documents, "_read_relative_regular_file", observe_read)
 
     selected = service.select("literature papers review", flow="deep_research")
+    assert reads == []
+    assert service.status()["loaded_count"] == 0
+
     rendered = service.render(selected.names, revision=selected.revision)
 
     assert selected.names == ("literature-review",)
     assert selected.revision == source_revision
     assert "PINNED LOCAL GUIDANCE" in rendered
+    assert reads == [skill_path.relative_to(tmp_path).as_posix()]
+    assert service.status()["loaded_count"] == 1
+    assert service.status()["cache_misses"] == 1
+
+    assert "PINNED LOCAL GUIDANCE" in service.render(
+        selected.names,
+        revision=selected.revision,
+    )
+    assert len(reads) == 1
+    assert service.status()["cache_hits"] == 1
     assert (
         service.render(
             selected.names,
@@ -78,6 +93,125 @@ def test_select_and_render_use_only_the_activated_in_memory_snapshot(
         )
         == ""
     )
+
+
+def test_render_fails_closed_after_selected_body_is_tampered(
+    tmp_path: Path,
+    write_skill,
+) -> None:
+    skill_path = write_skill(
+        tmp_path,
+        "review",
+        name="tamper-review",
+        description="Review evidence for papers",
+        body="ORIGINAL\n",
+    )
+    service = SkillService(
+        Settings(
+            agent_skills_enabled=True,
+            agent_skills_cache_dir=str(tmp_path / "cache"),
+            agent_skills_min_score=0.0,
+        ),
+        source=NoIoSource(),  # type: ignore[arg-type]
+    )
+    service._activate(
+        SourceSnapshot(
+            root=tmp_path,
+            revision="c" * 40,
+            status=SourceStatus.CACHED,
+            refreshed_at=1.0,
+            source_url="fixture://local",
+            ref="fixture",
+        )
+    )
+    selected = service.select("review papers evidence", flow="deep_research")
+    skill_path.write_text(skill_path.read_text() + "TAMPERED\n", encoding="utf-8")
+
+    assert service.render(selected.names, revision=selected.revision) == ""
+    assert service.status()["loaded_count"] == 0
+    assert service.status()["cache_misses"] == 1
+
+
+def test_preview_and_status_views_remain_revision_atomic_during_activation(
+    tmp_path: Path,
+    write_skill,
+    monkeypatch,
+) -> None:
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    write_skill(root_a, "alpha", name="alpha-skill", tags=("Alpha Skill",))
+    write_skill(
+        root_a,
+        "0-autoresearch-skill",
+        name="autoresearch",
+        tags=("Autoresearch",),
+    )
+    write_skill(root_b, "beta", name="beta-skill", tags=("Beta Skill",))
+    write_skill(root_b, "gamma", name="gamma-skill", tags=("Gamma Skill",))
+
+    service = SkillService(
+        Settings(
+            agent_skills_enabled=True,
+            agent_skills_cache_dir=str(tmp_path / "cache"),
+            agent_skills_min_score=0.0,
+        ),
+        source=NoIoSource(),  # type: ignore[arg-type]
+    )
+    snapshot_a = SourceSnapshot(
+        root=root_a,
+        revision="a" * 40,
+        status=SourceStatus.CACHED,
+        refreshed_at=1.0,
+        source_url="fixture://a",
+        ref="fixture",
+    )
+    snapshot_b = SourceSnapshot(
+        root=root_b,
+        revision="b" * 40,
+        status=SourceStatus.CACHED,
+        refreshed_at=2.0,
+        source_url="fixture://b",
+        ref="fixture",
+    )
+    service._activate(snapshot_a)
+    registry_a = service._registries[snapshot_a.revision]
+
+    original_select = registry_a.select
+
+    def select_then_activate(*args, **kwargs):
+        selected = original_select(*args, **kwargs)
+        service._activate(snapshot_b)
+        return selected
+
+    monkeypatch.setattr(registry_a, "select", select_then_activate)
+    preview, preview_status, loaded = service.preview_view(
+        "alpha-skill",
+        flow="deep_research",
+    )
+
+    assert [item.skill.name for item in preview.selections] == ["alpha-skill"]
+    assert preview.source_revision == snapshot_a.revision
+    assert preview_status["revision"] == snapshot_a.revision
+    assert preview_status["available_count"] == 1
+    assert preview_status["blocked_count"] == 1
+    assert loaded == (False,)
+    assert service.status()["revision"] == snapshot_b.revision
+
+    service._activate(snapshot_a)
+    original_cache_status = registry_a.cache_status
+
+    def cache_status_then_activate():
+        service._activate(snapshot_b)
+        return original_cache_status()
+
+    monkeypatch.setattr(registry_a, "cache_status", cache_status_then_activate)
+    status, diagnostics = service.status_view()
+
+    assert status["revision"] == snapshot_a.revision
+    assert status["available_count"] == 1
+    assert status["blocked_count"] == 1
+    assert [item["code"] for item in diagnostics] == ["policy_blocked"]
+    assert service._current_revision == snapshot_b.revision
 
 
 def test_metadata_serializer_never_exposes_a_skill_body(
@@ -153,6 +287,9 @@ def test_disabled_loader_ignores_invalid_loader_configuration() -> None:
         agent_skills_max_selected=-1,
         agent_skills_max_prompt_chars=1,
         agent_skills_min_score=-1,
+        agent_skills_cache_max_entries=-1,
+        agent_skills_cache_max_bytes=-1,
+        agent_skills_max_reference_bytes=-1,
     )
 
     service = SkillService(settings)
@@ -165,3 +302,23 @@ def test_disabled_loader_ignores_invalid_loader_configuration() -> None:
 def test_enabled_loader_rejects_unsafe_prompt_budget() -> None:
     with pytest.raises(ValidationError, match="max_prompt_chars"):
         Settings(agent_skills_enabled=True, agent_skills_max_prompt_chars=500)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("agent_skills_max_count", 2_049),
+        ("agent_skills_max_file_bytes", 2 * 1024 * 1024 + 1),
+        ("agent_skills_max_selected", 9),
+        ("agent_skills_cache_max_entries", 513),
+        ("agent_skills_cache_max_bytes", 1_023),
+        ("agent_skills_cache_max_bytes", 64 * 1024 * 1024 + 1),
+        ("agent_skills_max_reference_bytes", 2 * 1024 * 1024 + 1),
+    ),
+)
+def test_enabled_loader_rejects_unsafe_cache_and_document_bounds(
+    field: str,
+    value: int,
+) -> None:
+    with pytest.raises(ValidationError):
+        Settings(agent_skills_enabled=True, **{field: value})

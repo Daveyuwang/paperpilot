@@ -107,6 +107,7 @@ class SkillDescriptor:
     content_sha256: str
     byte_size: int
     body_chars: int
+    references: tuple[SkillReferenceDescriptor, ...] = ()
     availability: SkillAvailability = SkillAvailability.AVAILABLE
     blocked_reason: str = ""
 
@@ -117,6 +118,18 @@ class SkillDescriptor:
     @property
     def is_available(self) -> bool:
         return self.availability is SkillAvailability.AVAILABLE
+
+    @property
+    def reference_paths(self) -> tuple[str, ...]:
+        return tuple(reference.relative_path for reference in self.references)
+
+
+@dataclass(frozen=True)
+class SkillReferenceDescriptor:
+    """Manifest-pinned metadata for one optional Markdown reference."""
+
+    relative_path: str
+    content_sha256: str
 
 
 @dataclass(frozen=True)
@@ -141,19 +154,20 @@ class RenderedSkillReference:
 
 @dataclass(frozen=True)
 class SkillCatalogSnapshot:
-    """An immutable view of catalog metadata and its pinned source bodies.
+    """An immutable, metadata-only view of one catalog revision.
 
-    Bodies are retained privately so a run pinned to a revision cannot observe
-    files from a later refresh.  They are only exposed through bounded advisory
-    rendering, never through the public descriptor objects.
+    Skill and reference text is deliberately absent.  Runtime callers resolve
+    selected documents lazily from ``root`` and verify them against the pinned
+    descriptors before use.
     """
 
     root: Path
+    root_device: int
+    root_inode: int
     revision: str
     skills: tuple[SkillDescriptor, ...]
     diagnostics: tuple[SkillDiagnostic, ...]
     loaded_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    _bodies: Mapping[str, str] = field(default_factory=dict, repr=False, compare=False)
     _by_name: Mapping[str, SkillDescriptor] = field(
         init=False,
         repr=False,
@@ -171,11 +185,7 @@ class SkillCatalogSnapshot:
         if len(by_name) != len(ordered):
             raise ValueError("snapshot skills must have unique names")
 
-        bodies = dict(self._bodies)
-        if not set(bodies).issubset(by_name):
-            raise ValueError("snapshot body has no matching skill descriptor")
         object.__setattr__(self, "_by_name", MappingProxyType(by_name))
-        object.__setattr__(self, "_bodies", MappingProxyType(bodies))
 
     @property
     def available_skills(self) -> tuple[SkillDescriptor, ...]:
@@ -207,15 +217,6 @@ class SkillCatalogSnapshot:
                 f"skill is not available in revision {self.revision}: {name}"
             )
         return skill
-
-    def _body_for(self, name: str) -> str:
-        """Internal rendering accessor; blocked skills are always denied."""
-
-        self.require(name)
-        try:
-            return self._bodies[name]
-        except KeyError as exc:
-            raise KeyError(f"body unavailable for validated skill: {name}") from exc
 
 
 @dataclass(frozen=True)

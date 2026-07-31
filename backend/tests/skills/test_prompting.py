@@ -91,6 +91,27 @@ def test_user_controlled_policy_marker_cannot_suppress_trusted_suffix() -> None:
     assert protected.count("[PaperPilot skill-reference policy]") == 2
 
 
+def test_rendering_normalizes_newlines_and_suppresses_unicode_format_controls(
+    tmp_path: Path,
+    write_skill,
+) -> None:
+    write_skill(
+        tmp_path,
+        "unicode-controls",
+        name="unicode-controls",
+        body="safe\r\n\u202ehidden\u2066\ufeff\rend\n",
+    )
+    snapshot = load_skill_catalog(tmp_path)
+
+    rendered = render_skill_references(snapshot, ["unicode-controls"])
+
+    assert "\r" not in rendered.content
+    assert "\u202e" not in rendered.content
+    assert "\u2066" not in rendered.content
+    assert "\ufeff" not in rendered.content
+    assert "| safe\n| �hidden��\n| end" in rendered.content
+
+
 def test_deep_research_helper_preserves_message_role_boundary(monkeypatch) -> None:
     from app.deep_research import skill_context
 

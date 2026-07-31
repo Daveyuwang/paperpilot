@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 SkillWriter = Callable[..., Path]
+ManifestWriter = Callable[[Path], None]
 
 
 @pytest.fixture
@@ -44,3 +47,27 @@ def write_skill() -> SkillWriter:
         return path
 
     return _write_skill
+
+
+@pytest.fixture
+def write_snapshot_manifest() -> ManifestWriter:
+    """Write the minimal document manifest used by sanitized snapshots."""
+
+    def _write_manifest(root: Path) -> None:
+        documents: dict[str, str] = {}
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path.name == ".paperpilot-snapshot.json":
+                continue
+            relative = path.relative_to(root).as_posix()
+            documents[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+        marker = {
+            "version": 1,
+            "document_count": len(documents),
+            "documents": documents,
+        }
+        (root / ".paperpilot-snapshot.json").write_text(
+            json.dumps(marker),
+            encoding="utf-8",
+        )
+
+    return _write_manifest

@@ -28,11 +28,16 @@ from math import isfinite
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+import structlog
+
 DEFAULT_REPOSITORY_URL = "https://github.com/Orchestra-Research/AI-research-SKILLs"
 DEFAULT_REF = "main"
 DEFAULT_REFRESH_INTERVAL_SECONDS = 60 * 60
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
 DEFAULT_LOCK_TIMEOUT_SECONDS = 30
+DEFAULT_RETAINED_SNAPSHOTS = 8
+
+logger = structlog.get_logger()
 
 _METADATA_VERSION = 1
 _REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -303,6 +308,15 @@ class GitSkillSource:
                 _safe_child(self.cache_dir, "current.json"),
                 current_metadata,
             )
+            try:
+                self._prune_snapshots(snapshots_dir, current_revision=revision)
+            except OSError as exc:
+                # Cleanup must never invalidate a snapshot that was already
+                # published atomically. A later refresh will retry pruning.
+                logger.warning(
+                    "skill_snapshot_prune_failed",
+                    error=_safe_error_message(exc),
+                )
             return SourceSnapshot(
                 root=target_root,
                 revision=revision,
@@ -313,6 +327,40 @@ class GitSkillSource:
             )
         finally:
             _remove_tree(stage_path)
+
+    @staticmethod
+    def _prune_snapshots(snapshots_dir: Path, *, current_revision: str) -> None:
+        """Keep the current snapshot plus the newest retained revisions."""
+
+        candidates: list[tuple[int, str, Path]] = []
+        for entry in os.scandir(snapshots_dir):
+            try:
+                if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+                    continue
+                if not _REVISION_RE.fullmatch(entry.name):
+                    continue
+                modified = entry.stat(follow_symlinks=False).st_mtime_ns
+            except OSError:
+                continue
+            candidates.append((modified, entry.name, Path(entry.path)))
+
+        candidates.sort(reverse=True)
+        keep = {current_revision}
+        for _modified, revision, _path in candidates:
+            if revision == current_revision:
+                continue
+            if len(keep) >= DEFAULT_RETAINED_SNAPSHOTS:
+                break
+            keep.add(revision)
+
+        removed = False
+        for _modified, revision, path in candidates:
+            if revision in keep:
+                continue
+            _remove_tree(path)
+            removed = True
+        if removed:
+            _fsync_directory(snapshots_dir)
 
     def _validate_snapshot(self, root: Path, revision: str) -> None:
         if root.is_symlink() or not root.is_dir():
@@ -843,7 +891,7 @@ def _git_environment() -> dict[str, str]:
 
 
 def _remove_tree(root: Path) -> None:
-    """Remove only a private staging tree without following symlinks."""
+    """Remove one validated private tree without following symlinks."""
 
     if not root.exists() and not root.is_symlink():
         return
