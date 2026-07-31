@@ -65,4 +65,4 @@ lint:
 	docker compose exec backend ruff check app/
 
 test-backend:
-	docker compose exec backend pytest app/tests/ -v
+	docker compose exec backend pytest app/tests/ tests/ -v

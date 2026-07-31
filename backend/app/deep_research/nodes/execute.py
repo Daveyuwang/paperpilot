@@ -11,6 +11,7 @@ from app.deep_research.llm_factory import make_llm
 from app.deep_research.models import SubQuestion, SubReport, SourceRef
 from app.deep_research.prompts import EXECUTE_SYSTEM, EXECUTE_USER
 from app.deep_research.state import DeepResearchState
+from app.deep_research.skill_context import skill_aware_prompts
 from app.deep_research.tools.search import tavily_search
 from app.deep_research.tools.fetch import fetch_pages
 
@@ -124,6 +125,9 @@ async def _execute_single(
             question=sub_q.question,
             search_context=search_context,
         )
+        system_prompt, user_msg = skill_aware_prompts(
+            state, EXECUTE_SYSTEM, user_msg, max_chars=4_000,
+        )
 
         llm = make_llm(state, max_tokens=3000, temperature=0.2)
         structured_llm = llm.with_structured_output(SubReport)
@@ -131,7 +135,7 @@ async def _execute_single(
         report: SubReport = await _llm_summarize(
             structured_llm,
             [
-                {"role": "system", "content": EXECUTE_SYSTEM},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_msg},
             ]
         )

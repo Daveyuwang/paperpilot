@@ -17,6 +17,8 @@ import structlog
 from app.config import get_settings
 from app.agents.state import AgentState
 from app.llm.client import LLMClient
+from app.skills.prompting import attach_skill_reference, with_skill_policy
+from app.skills.service import get_skill_service
 from app.agents.prompts import (
     EVIDENCE_EXTRACTION_SYSTEM,
     SYNTHESIZE_SYSTEM,
@@ -70,6 +72,24 @@ def _clean_json(raw: str) -> str:
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw)
     return raw.strip()
+
+
+def _skill_aware_prompts(
+    state: AgentState,
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    max_chars: int = 8_000,
+) -> tuple[str, str]:
+    """Attach selected skill text as lower-authority user data, never as system text."""
+    reference = get_skill_service().render(
+        state.skill_names,
+        revision=state.skill_revision,
+        max_chars=max_chars,
+    )
+    if not reference:
+        return system_prompt, user_prompt
+    return with_skill_policy(system_prompt), attach_skill_reference(user_prompt, reference)
 
 
 # ── Streaming direct_answer extractor ─────────────────────────────────────
@@ -465,6 +485,9 @@ async def synthesize_answer(state: AgentState, stream_callback=None) -> dict:
         evidence_block=evidence_block,
         external_block=external_block,
     )
+    system_prompt, user_content = _skill_aware_prompts(
+        state, SYNTHESIZE_SYSTEM, user_content,
+    )
 
     # Stream the response, extracting direct_answer tokens as they arrive
     accumulated = ""
@@ -474,7 +497,7 @@ async def synthesize_answer(state: AgentState, stream_callback=None) -> dict:
     logger.info("generation_start", session_id=state.session_id, mode="paper_understanding")
 
     async for chunk in _llm(state).stream_text(
-        system=SYNTHESIZE_SYSTEM,
+        system=system_prompt,
         messages=[{"role": "user", "content": user_content}],
         max_tokens=1400,
         temperature=0.2,
@@ -549,6 +572,9 @@ async def synthesize_concept_explanation(state: AgentState, stream_callback=None
         question=state.question,
         evidence_block=evidence_block,
     )
+    system_prompt, user_content = _skill_aware_prompts(
+        state, CONCEPT_EXPLANATION_SYSTEM, user_content,
+    )
 
     accumulated = ""
     extractor = _DirectAnswerExtractor()
@@ -557,7 +583,7 @@ async def synthesize_concept_explanation(state: AgentState, stream_callback=None
     logger.info("generation_start", session_id=state.session_id, mode="concept_explanation")
 
     async for chunk in _llm(state).stream_text(
-        system=CONCEPT_EXPLANATION_SYSTEM,
+        system=system_prompt,
         messages=[{"role": "user", "content": user_content}],
         max_tokens=1000,
         temperature=0.2,
@@ -674,6 +700,10 @@ async def synthesize_expansion(state: AgentState, stream_callback=None) -> dict:
         if external_context:
             user_content += f"\n\nExternal context:\n{external_context}"
 
+    system_prompt, user_content = _skill_aware_prompts(
+        state, system_prompt, user_content,
+    )
+
     accumulated = ""
     extractor = _DirectAnswerExtractor()
     first_token_emitted = False
@@ -764,6 +794,9 @@ async def synthesize_navigation(state: AgentState, stream_callback=None) -> dict
         session_summary=_build_session_context(state),
         question=state.question,
     )
+    system_prompt, user_content = _skill_aware_prompts(
+        state, NAVIGATION_SYNTHESIZE_SYSTEM, user_content,
+    )
 
     accumulated = ""
     extractor = _DirectAnswerExtractor()
@@ -772,7 +805,7 @@ async def synthesize_navigation(state: AgentState, stream_callback=None) -> dict
     logger.info("generation_start", session_id=state.session_id, mode="navigation_or_next_step")
 
     async for chunk in _llm(state).stream_text(
-        system=NAVIGATION_SYNTHESIZE_SYSTEM,
+        system=system_prompt,
         messages=[{"role": "user", "content": user_content}],
         max_tokens=800,
         temperature=0.2,

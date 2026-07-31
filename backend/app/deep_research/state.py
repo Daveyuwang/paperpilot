@@ -14,6 +14,8 @@ class DeepResearchState(TypedDict, total=False):
     api_key: str
     llm_base_url: str | None
     llm_model: str | None
+    skill_names: list[str]
+    skill_revision: str | None
     sub_questions: list[SubQuestion]
     sub_reports: Annotated[list[SubReport], operator.add]
     failed_queries: list[dict]

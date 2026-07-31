@@ -335,6 +335,8 @@ def _log_request_trace(
         predicted_mode=state.intent,
         router_confidence=round(state.router_confidence, 3),
         mode_override_used=bool(state.mode_override),
+        skill_names=state.skill_names,
+        skill_revision=state.skill_revision,
         # Output
         scope_label_final=scope_label_final,
         answer_mode_used=answer_mode_used,
@@ -381,6 +383,8 @@ async def _load_state(
 
     resolved = await resolve_llm_settings_for_guest(guest_id) if guest_id else await resolve_llm_settings_for_guest("")
     llm_client = LLMClient(resolved)
+    from app.skills.service import get_skill_service
+    skill_context = get_skill_service().select(question, flow="paper_qa")
     state = AgentState(
         session_id=session_id,
         paper_id=paper_id,
@@ -388,6 +392,8 @@ async def _load_state(
         question=question,
         question_id=question_id,
         mode_override=mode_override,
+        skill_names=list(skill_context.names),
+        skill_revision=skill_context.revision,
         paper_title=paper_title,
         paper_abstract=paper_abstract,
         guide_questions=guide_questions,

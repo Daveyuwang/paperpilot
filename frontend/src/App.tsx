@@ -20,6 +20,7 @@ import { PaperList } from "@/components/PaperList";
 import { SettingsModal } from "@/components/SettingsModal";
 import { DeepResearchView } from "@/components/DeepResearchView";
 import { ProposalPlanView } from "@/components/ProposalPlanView";
+import { SkillsPage } from "@/components/SkillsPage";
 import clsx from "clsx";
 import { WifiOff, RefreshCw } from "lucide-react";
 
@@ -263,7 +264,7 @@ export default function App() {
           {/* Main area */}
           <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
             {/* Workspace header */}
-            <WorkspaceHeader />
+            {selectedNav !== "skills" && <WorkspaceHeader />}
 
             {/* Body: source rail (reader only) + page content */}
             <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -309,6 +310,7 @@ export default function App() {
                 )}
                 {selectedNav === "deep-research" && <DeepResearchView />}
                 {selectedNav === "proposal" && <ProposalPlanView />}
+                {selectedNav === "skills" && <SkillsPage />}
               </main>
             </div>
           </div>

@@ -2,7 +2,14 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
 export type ViewerTab = "reader" | "deliverable" | "sources" | "agenda" | "concepts";
-export type NavItem = "workspace" | "console" | "reader" | "deep-research" | "proposal" | "settings";
+export type NavItem =
+  | "workspace"
+  | "console"
+  | "reader"
+  | "deep-research"
+  | "proposal"
+  | "skills"
+  | "settings";
 
 export interface Workspace {
   id: string;
@@ -40,7 +47,15 @@ interface WorkspaceStore {
 }
 
 const VALID_VIEWER_TABS: ViewerTab[] = ["reader", "deliverable", "sources", "agenda", "concepts"];
-const VALID_NAV_ITEMS: NavItem[] = ["workspace", "console", "reader", "deep-research", "proposal", "settings"];
+const VALID_NAV_ITEMS: NavItem[] = [
+  "workspace",
+  "console",
+  "reader",
+  "deep-research",
+  "proposal",
+  "skills",
+  "settings",
+];
 
 function wsId(): string {
   return `ws_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

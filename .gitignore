@@ -19,6 +19,7 @@ build/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.runtime/
 
 # Node / Frontend
 node_modules/

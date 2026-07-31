@@ -23,6 +23,10 @@ class AgentState(BaseModel):
     answer_mode: str = "paper_understanding"
     mode_override: str | None = None  # set by client to bypass intent classification
 
+    # Dynamically selected third-party skill snapshot (metadata only in state)
+    skill_names: list[str] = Field(default_factory=list)
+    skill_revision: str | None = None
+
     # Query enrichment (internal only — never shown to user)
     enriched_query: str = ""
 

@@ -5,6 +5,7 @@ import {
   BookOpen,
   FlaskConical,
   FileText,
+  Blocks,
   Settings,
 } from "lucide-react";
 import clsx from "clsx";
@@ -16,6 +17,7 @@ const NAV_ITEMS: { id: NavItem; label: string; icon: React.ElementType }[] = [
   { id: "reader",        label: "Reader",        icon: BookOpen },
   { id: "deep-research", label: "Deep Research", icon: FlaskConical },
   { id: "proposal",      label: "Proposal",      icon: FileText },
+  { id: "skills",        label: "Skills",        icon: Blocks },
 ];
 
 interface Props {
