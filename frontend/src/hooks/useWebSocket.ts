@@ -5,6 +5,7 @@ import { getGuestId } from "@/store/guestStore";
 const WS_BASE = import.meta.env.VITE_WS_URL ?? "";
 
 type MessageHandler = (msg: WSMessage) => void;
+type DisconnectHandler = () => void;
 type OutboundMessage = {
   question: string;
   question_id: string | null;
@@ -12,11 +13,18 @@ type OutboundMessage = {
   context?: Record<string, unknown>;
 };
 
-export function useWebSocket(sessionId: string | null, onMessage: MessageHandler) {
+export function useWebSocket(
+  sessionId: string | null,
+  onMessage: MessageHandler,
+  onUnexpectedDisconnect?: DisconnectHandler
+) {
   const wsRef = useRef<WebSocket | null>(null);
   const handlerRef = useRef<MessageHandler>(onMessage);
+  const disconnectHandlerRef = useRef<DisconnectHandler | undefined>(onUnexpectedDisconnect);
+  const intentionallyClosedSocketsRef = useRef(new WeakSet<WebSocket>());
   const pendingMessagesRef = useRef<OutboundMessage[]>([]);
   handlerRef.current = onMessage;
+  disconnectHandlerRef.current = onUnexpectedDisconnect;
   // Increment to force a reconnect without changing sessionId
   const [reconnectTick, setReconnectTick] = useState(0);
 
@@ -51,11 +59,17 @@ export function useWebSocket(sessionId: string | null, onMessage: MessageHandler
 
     ws.onclose = () => {
       console.log("[WS] disconnected");
+      if (!intentionallyClosedSocketsRef.current.has(ws)) {
+        disconnectHandlerRef.current?.();
+      }
     };
 
     return () => {
+      intentionallyClosedSocketsRef.current.add(ws);
       ws.close();
-      wsRef.current = null;
+      if (wsRef.current === ws) {
+        wsRef.current = null;
+      }
     };
   }, [sessionId, reconnectTick]);
 
@@ -81,8 +95,10 @@ export function useWebSocket(sessionId: string | null, onMessage: MessageHandler
 
   // Close the connection immediately (used for stop-generating)
   const disconnect = useCallback(() => {
-    if (wsRef.current) {
-      wsRef.current.close();
+    const ws = wsRef.current;
+    if (ws) {
+      intentionallyClosedSocketsRef.current.add(ws);
+      ws.close();
       wsRef.current = null;
     }
     pendingMessagesRef.current = [];

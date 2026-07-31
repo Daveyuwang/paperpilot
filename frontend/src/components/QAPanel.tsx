@@ -139,7 +139,6 @@ export function QAPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const slowHintTimerRef = useRef<number | null>(null);
-  const stuckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const latestCitations = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -159,35 +158,8 @@ export function QAPanel({
     }
   }, [fillInputRef]);
 
-  const resetStuckTimer = useCallback(() => {
-    if (stuckTimerRef.current) clearTimeout(stuckTimerRef.current);
-    if (!pendingAssistantId.current) return;
-    stuckTimerRef.current = setTimeout(() => {
-      const id = pendingAssistantId.current;
-      if (!id) return;
-      const msg = useChatStore.getState().messages.find((m) => m.id === id);
-      if (msg && !msg.isDone) {
-        if (!msg.answerJson && !msg.streamingText && !msg.content) {
-          failMessage(id, "No response received — the connection may have dropped.");
-        } else {
-          finalizeMessage(id);
-        }
-        pendingAssistantId.current = null;
-        pendingCitationsRef.current = [];
-        streamingTextRef.current = "";
-      }
-    }, 20_000);
-  }, [failMessage, finalizeMessage]);
-
-  useEffect(() => {
-    return () => {
-      if (stuckTimerRef.current) clearTimeout(stuckTimerRef.current);
-    };
-  }, []);
-
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const handleWSMessage = useCallback((msg: WSMessage) => {
-    resetStuckTimer();
     switch (msg.type) {
       case "status":
         if (!pendingAssistantId.current) return;
@@ -233,7 +205,6 @@ export function QAPanel({
       }
 
       case "answer_done": {
-        if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
         const id = pendingAssistantId.current;
         if (!id) return;
         const doneMsg = useChatStore.getState().messages.find((m) => m.id === id);
@@ -273,7 +244,6 @@ export function QAPanel({
         break;
 
       case "error": {
-        if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
         const id = pendingAssistantId.current;
         const errText = `[Error]\n${String(msg.content ?? "Unknown error")}`;
         if (id) {
@@ -291,7 +261,28 @@ export function QAPanel({
     onHighlight, onNextQuestion, markDoneByTrailId, resolveUpNext,
   ]);
 
-  const { sendMessage, disconnect, reconnect } = useWebSocket(effectiveSessionId, handleWSMessage);
+  const handleUnexpectedDisconnect = useCallback(() => {
+    const id = pendingAssistantId.current;
+    if (!id) return;
+
+    const message = useChatStore.getState().messages.find((candidate) => candidate.id === id);
+    if (message && !message.isDone) {
+      if (!message.answerJson && !message.streamingText && !message.content) {
+        failMessage(id, "Connection lost before a response was received.");
+      } else {
+        finalizeMessage(id);
+      }
+    }
+    pendingAssistantId.current = null;
+    pendingCitationsRef.current = [];
+    streamingTextRef.current = "";
+  }, [failMessage, finalizeMessage]);
+
+  const { sendMessage, disconnect, reconnect } = useWebSocket(
+    effectiveSessionId,
+    handleWSMessage,
+    handleUnexpectedDisconnect
+  );
 
   const submit = useCallback((question: string, questionId?: string, opts?: { skipAddMessage?: boolean }) => {
     if (!question.trim() || isGenerating) return;
