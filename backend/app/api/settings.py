@@ -94,4 +94,3 @@ async def delete_llm_settings(guest_id: str = Depends(require_guest_id)):
         model=defaults.get("model") or "claude-sonnet-4-6",
         language=defaults.get("language") or "en",
     )
-

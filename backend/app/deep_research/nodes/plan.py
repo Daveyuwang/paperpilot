@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import time
 import structlog
+from langgraph.runtime import Runtime
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from app.deep_research.config import DEPTH_CONFIG
-from app.deep_research.llm_factory import make_llm
+from app.deep_research.context import DeepResearchContext
+from app.deep_research.llm_factory import make_structured_llm
 from app.deep_research.models import Plan
 from app.deep_research.prompts import PLAN_SYSTEM, PLAN_USER
 from app.deep_research.state import DeepResearchState
@@ -23,7 +25,10 @@ async def _invoke_plan(structured_llm, messages):
     return await structured_llm.ainvoke(messages)
 
 
-async def plan_node(state: DeepResearchState) -> dict:
+async def plan_node(
+    state: DeepResearchState,
+    runtime: Runtime[DeepResearchContext] | None = None,
+) -> dict:
     # If sub_questions already provided (from pre_plan), skip generation
     if state.get("sub_questions"):
         logger.info("plan_node_skipped", reason="pre_plan provided", num_sub_questions=len(state["sub_questions"]))
@@ -49,8 +54,13 @@ async def plan_node(state: DeepResearchState) -> dict:
         sources_block=sources_block,
     )
 
-    llm = make_llm(state, max_tokens=2000, temperature=0.3)
-    structured_llm = llm.with_structured_output(Plan)
+    structured_llm = make_structured_llm(
+        state,
+        Plan,
+        runtime=runtime,
+        max_tokens=2000,
+        temperature=0.3,
+    )
 
     try:
         plan: Plan = await _invoke_plan(

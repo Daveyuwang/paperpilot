@@ -1,7 +1,7 @@
 from __future__ import annotations
 from datetime import datetime
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ── Paper ─────────────────────────────────────────────────────────────────
@@ -158,7 +158,7 @@ class LLMSettingsIn(BaseModel):
     protocol: str = Field(..., min_length=1, max_length=64)
     base_url: str | None = Field(default=None, max_length=2048)
     api_key: str | None = Field(default=None, max_length=4096)
-    model: str = Field(default="claude-sonnet-4-6", min_length=1, max_length=256)
+    model: str = Field(default="deepseek-v4-pro", min_length=1, max_length=256)
     language: str = Field(default="en", min_length=1, max_length=32)
 
 
@@ -166,7 +166,7 @@ class LLMSettingsOut(BaseModel):
     protocol: str
     base_url: str | None = None
     has_key: bool = False
-    model: str = "claude-sonnet-4-6"
+    model: str = "deepseek-v4-pro"
     language: str = "en"
 
 
@@ -209,3 +209,59 @@ class WorkflowRunOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class DeepResearchResumeRequest(BaseModel):
+    workspace_id: str = Field(..., min_length=1, max_length=36)
+
+
+class DeepResearchResumeCapability(BaseModel):
+    allowed: bool
+    checkpoint_available: bool
+    backend: str
+    durable: bool
+    checkpoint_id: str | None = None
+    next_nodes: list[str] = Field(default_factory=list)
+    reason_code: str
+    reason: str
+
+
+class DeepResearchRunSnapshotOut(BaseModel):
+    """Ownership-scoped, server-authoritative Deep Research run snapshot."""
+
+    id: str
+    run_id: str
+    workspace_id: str
+    status: str
+    current_stage: str | None = None
+    stages_completed: list[str] = Field(default_factory=list)
+    graph_version: str
+    checkpoint_backend: str
+    report_accepted: bool
+    publishable: bool
+    terminal_reason: str | None = None
+    candidate_diagnostics: dict[str, Any] | None = None
+    resume: DeepResearchResumeCapability
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+
+
+class DeepResearchArtifactVersionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    run_id: str
+    workspace_id: str
+    artifact_kind: str
+    logical_artifact_id: str
+    version_number: int
+    plan_version: int
+    controller_cycle: int
+    schema_version: int
+    parent_version_id: str | None = None
+    source_checkpoint_id: str | None = None
+    content_hash: str
+    write_key: str
+    payload: dict[str, Any]
+    created_at: datetime

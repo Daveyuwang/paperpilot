@@ -1,8 +1,9 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import (
     String, Text, Integer, Float, Boolean, DateTime, ForeignKey,
-    Enum as SAEnum, JSON, UniqueConstraint,
+    Enum as SAEnum, JSON, UniqueConstraint, CheckConstraint, Index,
+    event as sa_event,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -23,6 +24,7 @@ class WorkflowRunStatus(str, enum.Enum):
     completed = "completed"
     failed = "failed"
     interrupted = "interrupted"
+    incomplete = "incomplete"
 
 
 class WorkflowRunType(str, enum.Enum):
@@ -30,6 +32,18 @@ class WorkflowRunType(str, enum.Enum):
     proposal = "proposal"
     plan = "plan"
     deliverable_draft = "deliverable_draft"
+
+
+class DeepResearchArtifactKind(str, enum.Enum):
+    """Typed immutable snapshots emitted by the Deep Research workflow."""
+
+    plan = "plan"
+    sub_report = "sub_report"
+    pre_synthesis_evaluation = "pre_synthesis_evaluation"
+    controller_transition = "controller_transition"
+    report_candidate = "report_candidate"
+    post_synthesis_evaluation = "post_synthesis_evaluation"
+    terminal_decision = "terminal_decision"
 
 
 # ── Research Director lifecycle ───────────────────────────────────
@@ -83,6 +97,16 @@ class Workspace(Base):
             back_populates="workspace",
             cascade="all, delete-orphan",
         )
+    )
+    deep_research_artifact_versions: Mapped[
+        list["DeepResearchArtifactVersion"]
+    ] = relationship(
+        back_populates="workspace",
+        passive_deletes=True,
+    )
+    deep_research_run_events: Mapped[list["DeepResearchRunEvent"]] = relationship(
+        back_populates="workspace",
+        passive_deletes="all",
     )
 
 
@@ -247,6 +271,281 @@ class WorkflowRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    deep_research_artifact_versions: Mapped[
+        list["DeepResearchArtifactVersion"]
+    ] = relationship(
+        back_populates="run",
+        passive_deletes=True,
+        order_by="DeepResearchArtifactVersion.created_at",
+    )
+    deep_research_run_events: Mapped[list["DeepResearchRunEvent"]] = relationship(
+        back_populates="run",
+        passive_deletes="all",
+        order_by="DeepResearchRunEvent.seq",
+    )
+
+
+class DeepResearchArtifactVersion(Base):
+    """Immutable, lineage-aware Deep Research artifact snapshot.
+
+    Application code must create rows through ``deep_research.artifacts`` so
+    ownership, canonical hashing, secret rejection, lineage, and idempotency
+    checks are applied consistently. Rows intentionally have no ``updated_at``
+    field: a correction is represented by a new version.
+    """
+
+    __tablename__ = "deep_research_artifact_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "write_key",
+            name="uq_deep_research_artifact_versions_run_write_key",
+        ),
+        UniqueConstraint(
+            "run_id",
+            "artifact_kind",
+            "logical_artifact_id",
+            "version_number",
+            name="uq_deep_research_artifact_versions_logical_version",
+        ),
+        CheckConstraint(
+            "version_number > 0",
+            name="ck_deep_research_artifact_versions_version_positive",
+        ),
+        CheckConstraint(
+            "plan_version >= 0",
+            name="ck_deep_research_artifact_versions_plan_version_nonnegative",
+        ),
+        CheckConstraint(
+            "controller_cycle >= 0",
+            name="ck_deep_research_artifact_versions_cycle_nonnegative",
+        ),
+        CheckConstraint(
+            "schema_version > 0",
+            name="ck_deep_research_artifact_versions_schema_version_positive",
+        ),
+        CheckConstraint(
+            "length(trim(logical_artifact_id)) > 0",
+            name="ck_deep_research_artifact_versions_logical_id_nonempty",
+        ),
+        CheckConstraint(
+            "length(trim(write_key)) > 0",
+            name="ck_deep_research_artifact_versions_write_key_nonempty",
+        ),
+        CheckConstraint(
+            "length(content_hash) = 64",
+            name="ck_deep_research_artifact_versions_hash_length",
+        ),
+        Index(
+            "ix_deep_research_artifact_versions_run_kind_cycle",
+            "run_id",
+            "artifact_kind",
+            "controller_cycle",
+        ),
+        Index(
+            "ix_deep_research_artifact_versions_owner_cycle",
+            "run_id",
+            "workspace_id",
+            "guest_id",
+            "controller_cycle",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workflow_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    guest_id: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        index=True,
+    )
+    artifact_kind: Mapped[DeepResearchArtifactKind] = mapped_column(
+        SAEnum(
+            DeepResearchArtifactKind,
+            name="ck_deep_research_artifact_versions_kind",
+            native_enum=False,
+            create_constraint=True,
+            validate_strings=True,
+            values_callable=lambda enum_type: [item.value for item in enum_type],
+            length=32,
+        ),
+        nullable=False,
+    )
+    logical_artifact_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    controller_cycle: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    parent_version_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey(
+            "deep_research_artifact_versions.id",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=True,
+        index=True,
+    )
+    source_checkpoint_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    write_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+    )
+
+    run: Mapped["WorkflowRun"] = relationship(
+        back_populates="deep_research_artifact_versions"
+    )
+    workspace: Mapped["Workspace"] = relationship(
+        back_populates="deep_research_artifact_versions"
+    )
+    parent_version: Mapped["DeepResearchArtifactVersion | None"] = relationship(
+        remote_side=[id],
+        foreign_keys=[parent_version_id],
+    )
+
+
+class DeepResearchRunEvent(Base):
+    """Immutable event in one Deep Research run's durable replay stream."""
+
+    __tablename__ = "deep_research_run_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "seq",
+            name="uq_deep_research_run_events_run_seq",
+        ),
+        UniqueConstraint(
+            "run_id",
+            "event_id",
+            name="uq_deep_research_run_events_run_event_id",
+        ),
+        CheckConstraint(
+            "seq > 0",
+            name="ck_deep_research_run_events_seq_positive",
+        ),
+        CheckConstraint(
+            "schema_version = 'deep-research-event.v1'",
+            name="ck_deep_research_run_events_schema_version",
+        ),
+        CheckConstraint(
+            "type IN ('run_started', 'phase_started', 'phase_completed', "
+            "'subquestion_upserted', 'subquestion_progressed', "
+            "'evaluation_started', 'evaluation_completed', 'route_selected', "
+            "'artifact_version_created', 'checkpoint_saved', 'budget_updated', "
+            "'synthesis_section_updated', 'run_finished', 'protocol_error')",
+            name="ck_deep_research_run_events_type_supported",
+        ),
+        CheckConstraint(
+            "cycle >= 0",
+            name="ck_deep_research_run_events_cycle_nonnegative",
+        ),
+        CheckConstraint(
+            "plan_version >= 0",
+            name="ck_deep_research_run_events_plan_version_nonnegative",
+        ),
+        CheckConstraint(
+            "corpus_version >= 0",
+            name="ck_deep_research_run_events_corpus_version_nonnegative",
+        ),
+        CheckConstraint(
+            "report_version IS NULL OR report_version >= 1",
+            name="ck_deep_research_run_events_report_version_positive",
+        ),
+        Index(
+            "ix_deep_research_run_events_run_seq",
+            "run_id",
+            "seq",
+        ),
+        Index(
+            "ix_deep_research_run_events_owner_seq",
+            "run_id",
+            "workspace_id",
+            "guest_id",
+            "seq",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    run_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workflow_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    guest_id: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        index=True,
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    type: Mapped[str] = mapped_column(String(128), nullable=False)
+    emitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    cycle: Mapped[int] = mapped_column(Integer, nullable=False)
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    corpus_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    report_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    checkpoint_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+    run: Mapped["WorkflowRun"] = relationship(
+        back_populates="deep_research_run_events"
+    )
+    workspace: Mapped["Workspace"] = relationship(
+        back_populates="deep_research_run_events"
+    )
+
+
+class ImmutableDeepResearchRunEventError(RuntimeError):
+    """An existing Deep Research replay event cannot be changed directly."""
+
+
+@sa_event.listens_for(DeepResearchRunEvent, "before_update", propagate=True)
+def _prevent_deep_research_run_event_update(*_args) -> None:
+    raise ImmutableDeepResearchRunEventError(
+        "Deep Research run events are immutable; append a new event"
+    )
+
+
+@sa_event.listens_for(DeepResearchRunEvent, "before_delete", propagate=True)
+def _prevent_deep_research_run_event_delete(*_args) -> None:
+    raise ImmutableDeepResearchRunEventError(
+        "Deep Research run events can only be deleted with their owning run"
+    )
 
 
 class ResearchProject(Base):

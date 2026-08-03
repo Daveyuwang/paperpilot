@@ -45,4 +45,3 @@ async def resolve_llm_settings_for_guest(guest_id: str) -> ResolvedLLMSettings:
         api_key=api_key,
         model=settings.llm_model or settings.claude_model,
     )
-

@@ -27,7 +27,7 @@ import { WifiOff, RefreshCw } from "lucide-react";
 
 type QueuedQuestion = { id?: string; question: string; nonce: number } | null;
 
-const IDLE_STATUSES = ["idle", "needs_clarification", "completed", "blocked", "failed", "interrupted"];
+const IDLE_STATUSES = ["idle", "needs_clarification", "completed", "incomplete", "blocked", "failed", "interrupted"];
 function syncBeforeUnload() {
   const drRunning = !IDLE_STATUSES.includes(useDeepResearchStore.getState().status);
   const ppRunning = !IDLE_STATUSES.includes(useProposalPlanStore.getState().status);

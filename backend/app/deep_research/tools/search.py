@@ -35,7 +35,11 @@ async def tavily_search(
                 )
                 return resp.get("results", [])
             except Exception as exc:
-                logger.warning("tavily_search_failed", query=query, error=str(exc))
+                logger.warning(
+                    "tavily_search_failed",
+                    query=query,
+                    error_type=type(exc).__name__,
+                )
                 return []
 
     all_raw = await asyncio.gather(*[_single_search(q) for q in queries])
@@ -50,6 +54,10 @@ async def tavily_search(
                     "title": item.get("title", ""),
                     "snippet": item.get("content", ""),
                     "score": item.get("score", 0.0),
+                    "published_at": (
+                        item.get("published_at") or item.get("published_date")
+                    ),
+                    "source_type": item.get("source_type"),
                 })
 
     results.sort(key=lambda x: x.get("score", 0.0), reverse=True)

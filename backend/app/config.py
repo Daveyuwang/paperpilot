@@ -42,6 +42,15 @@ class Settings(BaseSettings):
     web_search_enabled: bool = True
     inline_ingestion: bool = False
 
+    # Deep Research execution checkpoints. Disabled non-production and test
+    # environments use an in-memory saver. Production fails startup unless
+    # encrypted Postgres persistence and its native schema are enabled.
+    deep_research_checkpoint_enabled: bool = False
+    deep_research_checkpoint_database_url: str | None = None
+    deep_research_checkpoint_aes_key: str = ""
+    deep_research_checkpoint_auto_setup: bool = False
+    deep_research_checkpoint_pool_size: int = 4
+
     # External APIs
     semantic_scholar_api_key: str = ""
     tavily_api_key: str = ""
@@ -77,6 +86,15 @@ class Settings(BaseSettings):
             return value.replace("postgresql://", "postgresql+asyncpg://", 1)
         if value.startswith("postgres://"):
             return value.replace("postgres://", "postgresql+asyncpg://", 1)
+        return value
+
+    @field_validator("deep_research_checkpoint_pool_size")
+    @classmethod
+    def validate_deep_research_checkpoint_pool_size(cls, value: int) -> int:
+        if not 1 <= value <= 20:
+            raise ValueError(
+                "deep_research_checkpoint_pool_size must be between 1 and 20"
+            )
         return value
 
     @property

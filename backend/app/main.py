@@ -26,6 +26,10 @@ from app.api import (
     workspaces,
     ws,
 )
+from app.deep_research.runtime import (
+    initialize_deep_research_runtime,
+    shutdown_deep_research_runtime,
+)
 from app.ingestion.tasks import run_ingestion_job
 from app.models.orm import Paper, PaperStatus
 from app.tracing import flush_tracing
@@ -65,10 +69,14 @@ async def lifespan(app: FastAPI):
         await init_db()
     else:
         logger.info("schema_init_skipped", reason="production_uses_alembic")
-    await _resume_processing_papers()
-    yield
-    flush_tracing()
-    logger.info("shutdown")
+    await initialize_deep_research_runtime(settings)
+    try:
+        await _resume_processing_papers()
+        yield
+    finally:
+        await shutdown_deep_research_runtime()
+        flush_tracing()
+        logger.info("shutdown")
 
 
 app = FastAPI(

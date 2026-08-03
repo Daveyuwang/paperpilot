@@ -1,11 +1,10 @@
 import structlog
-from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 
 from app.api.guest import require_guest_id
 from app.db.postgres import AsyncSessionLocal
-from app.models.orm import WorkflowRun, WorkflowRunStatus
+from app.models.orm import WorkflowRun
 from app.models.schemas import WorkflowRunOut
 
 logger = structlog.get_logger()
@@ -50,9 +49,13 @@ async def resume_workflow_run(
         run = await db.get(WorkflowRun, run_id)
         if not run or run.guest_id != guest_id:
             raise HTTPException(status_code=404, detail="Run not found")
-        if run.status != WorkflowRunStatus.interrupted:
-            raise HTTPException(status_code=400, detail="Only interrupted runs can be resumed")
-        run.status = WorkflowRunStatus.running
-        run.updated_at = datetime.utcnow()
-        await db.commit()
-    return {"status": "resumed", "run_id": run_id}
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "code": "workflow_resume_endpoint_gone",
+            "message": (
+                "Use POST /api/deep-research/runs/"
+                f"{run_id}/resume/stream with workspace_id."
+            ),
+        },
+    )

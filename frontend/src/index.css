@@ -59,6 +59,17 @@
     background-color: #3d6ff0;
   }
 
+  .btn-secondary {
+    @apply font-medium px-3 py-2 rounded-lg transition-colors duration-150
+           disabled:opacity-40 disabled:cursor-not-allowed;
+    background-color: #ffffff;
+    color: #3d3830;
+    box-shadow: inset 0 0 0 1px #ddd8d0;
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background-color: #f4f2ee;
+  }
+
   .btn-ghost {
     @apply px-3 py-1.5 rounded-lg transition-colors duration-150;
     color: #8a8278;
@@ -71,7 +82,7 @@
   .input-base {
     @apply text-sm px-3 py-2 border border-surface-200 rounded-lg bg-white
            focus:outline-none focus:ring-1 focus:ring-accent-400
-           placeholder:text-surface-300;
+           placeholder:text-surface-600;
   }
 
   .select-base {
@@ -151,5 +162,14 @@
     background-clip: text;
     -webkit-background-clip: text;
     animation: subtle-text-shimmer 3.2s linear infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
